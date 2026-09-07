@@ -25,13 +25,15 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLongArray;
 
+import de.robv.android.xposed.XposedBridge;
+
 /** Owns disk IO: consumes control values and separately publishes vehicle state. */
 final class ControlFileMonitor {
     interface Listener {
         void onEdit(VehicleControl control, Snapshot snapshot, Integer value);
     }
 
-    private static final String TAG = "EcarxSocFix";
+    private final String logTag;
     private static final int MAX_BYTES = 128;
     private static final long POLL_MS = 500;
     private final Path directory = Paths.get("/sdcard/ecarx_mod");
@@ -44,6 +46,11 @@ final class ControlFileMonitor {
     private long lastError;
 
     ControlFileMonitor(Listener listener, VehicleControl... controls) {
+        this("EcarxSocFix", listener, controls);
+    }
+
+    ControlFileMonitor(String logTag, Listener listener, VehicleControl... controls) {
+        this.logTag = logTag;
         this.listener = listener;
         for (VehicleControl control : controls) entries.put(control, new Entry());
     }
@@ -52,6 +59,7 @@ final class ControlFileMonitor {
         thread.start();
         handler = new Handler(thread.getLooper());
         handler.post(this::poll);
+        XposedBridge.log(logTag + ": file monitor started for " + entries.keySet() + " at " + directory);
     }
 
     private void poll() {
@@ -73,6 +81,7 @@ final class ControlFileMonitor {
                         entry.snapshot = read(path);
                         entry.initialized = true;
                         entry.failed = false;
+                        XposedBridge.log(logTag + ": control file ready: " + path);
                         continue;
                     }
                     Snapshot snapshot = read(path);
@@ -149,6 +158,7 @@ final class ControlFileMonitor {
                     } catch (AtomicMoveNotSupportedException ignored) {
                         Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
                     }
+                    if (!current.exists) XposedBridge.log(logTag + ": state file created: " + destination);
                 }
             } catch (IOException | RuntimeException error) {
                 report(error);
@@ -235,7 +245,10 @@ final class ControlFileMonitor {
         long now = SystemClock.elapsedRealtime();
         if (lastError == 0 || now - lastError >= 30000) {
             lastError = now;
-            Log.w(TAG, "File access unavailable; will try again", error);
+            String message = "File access unavailable for " + entries.keySet() + " at "
+                    + directory + "; will try again";
+            Log.w(logTag, message, error);
+            XposedBridge.log(logTag + ": " + message + " (" + error + ")");
         }
     }
 

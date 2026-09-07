@@ -1,6 +1,6 @@
 # ECARX 保电修复
 
-用于 Android 9 车机、LSPosed API 93 的模块，作用域为 `ecarx.settings` 和 `ecarx.hvac.app`。当前版本 **1.5.1**：空调 AQS／G-clean 循环纠正改为设置页独立开关，**默认关闭**，保存后约 1 秒内生效。空调内外循环文件控制保持独立可用。开启纠正后，每次检测到自动变更，最多纠正 **2 次**，恢复后发生新的自动变更再开始新一轮；一键除雾／除霜等必要切换让出控制。保留 1.4.1 的独立 HEV／低速提示开关、共享 **5–300 秒**启动延时、保电恢复及原有文件接口。
+用于 Android 9 车机、LSPosed API 93 的模块，作用域为 `ecarx.settings` 和 `ecarx.hvac.app`。当前版本 **1.5.2**：修复空调入口过早创建主线程 Handler、导致入口加载失败而不创建文件的问题；车辆回调改为识别实际对象，不再依赖匿名类编号，并增加文件启动／创建／访问失败日志。空调 AQS／G-clean 纠正开关继续**默认关闭**，保存后约 1 秒内生效，文件控制独立可用。开启纠正后每次自动变更最多纠正 **2 次**，一键除雾／除霜等必要切换让出控制。保留独立 HEV／低速提示开关、共享 **5–300 秒**启动延时、保电恢复及原有文件接口。
 
 适配依据是 XCSettings2 **3.0.0.0064（versionCode 3000064）** 和 XCHvac **2.3.0.026（versionCode 230026）** 的本地 APK／VDEX 中的类名、方法和功能 ID。按需求未执行单元测试、设备测试或实车验证；GitHub Actions 只编译和打包 APK。
 
@@ -150,6 +150,19 @@ echo 1 > /sdcard/ecarx_mod/hvac_circulation.txt
 | MAX AC 强力制冷 | `0x10010400` / `268502016` | 开启和退出过渡期间让出循环控制 |
 
 空调日志：`adb logcat -s EcarxHvacLock:I`。`AQS/G-clean circulation correction 1/2`／`2/2` 表示已尝试下发，实际结果看循环状态文件和车辆回读。
+
+### 空调两个文件未出现时
+
+1.5.0／1.5.1 的空调入口把 `new Handler(Looper.getMainLooper())` 写在实例字段初始化中。LSPosed 在注册包加载回调之前就实例化入口，此时不能假设应用主线程 Looper 已就绪；Android 9 的 Handler 构造函数会直接访问传入 Looper 的消息队列，传入空值会导致入口加载失败，文件监控根本没有启动。这与纠正开关是否开启无关。依据：[LSPosed 入口实例化](https://github.com/LSPosed/LSPosed/blob/v1.9.2/core/src/main/java/de/robv/android/xposed/XposedInit.java#L247)、[Android 9 Handler 实现](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-9.0.0_r1/core/java/android/os/Handler.java#L220)。1.5.2 把 Handler 和文件监控器创建延后到空调 `Application.onCreate()`，并允许车辆事件回调不可用时继续轮询。
+
+新版在 LSPosed 日志中提供以下阶段信息：
+
+- `EcarxHvacLock: installed for ecarx.hvac.app`：目标 Hook 安装完成。
+- `EcarxHvacLock: file monitor started for [HVAC_CIRCULATION] at /sdcard/ecarx_mod`：文件线程已启动，不以车辆连接成功或纠正开关开启为条件。
+- `control file ready: .../hvac_circulation.txt`／`state file created: .../hvac_circulation_state.txt`：控制文件已可读取、状态文件已创建。
+- `File access unavailable for [HVAC_CIRCULATION] ...`：查看同条日志的具体异常，以区分存储未挂载、`EACCES`／权限拒绝等问题，每 30 秒最多报告一次。
+
+仅凭文件缺失不能排除其他原因：需要安装新版 APK、勾选 `ecarx.hvac.app` 并在升级后重启目标进程。若仍缺失，上述阶段日志可定位是没有注入、应用尚未启动，还是文件访问失败；不要通过打开自动纠正开关来尝试创建文件。
 
 ## 修复逻辑
 

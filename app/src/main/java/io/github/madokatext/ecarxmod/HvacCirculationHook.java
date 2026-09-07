@@ -41,12 +41,14 @@ public final class HvacCirculationHook implements IXposedHookLoadPackage {
     private static final String EPISODE = "correction_episode_pending";
     private static final String AWAITING_MANUAL = "awaiting_manual_readback";
 
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    // Legacy Xposed may instantiate entry classes before the app's main Looper exists.
+    // Only allocate Android runtime-dependent objects from Application.onCreate.
+    private Handler handler;
     private final Runnable poll = this::pollState;
     private final ThreadLocal<Boolean> dispatching = new ThreadLocal<>();
     private final AtomicInteger hostRevision = new AtomicInteger();
     private final List<XC_MethodHook.Unhook> hooks = new ArrayList<>();
-    private final ControlFileMonitor files = new ControlFileMonitor(this::onEdit, CONTROL);
+    private ControlFileMonitor files;
     // All mutable controller state below is owned by the main looper.
     private Object manager;
     private Context context;
@@ -72,7 +74,6 @@ public final class HvacCirculationHook implements IXposedHookLoadPackage {
         try {
             Class<?> carClass = XposedHelpers.findClass(CAR_MANAGER, loaded.classLoader);
             XposedHelpers.findField(carClass, "mCarFunction");
-            XposedHelpers.findField(carClass, "mWatcher");
             XC_MethodHook setter = new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     if (!started || stopped || Boolean.TRUE.equals(dispatching.get())) return;
@@ -120,42 +121,30 @@ public final class HvacCirculationHook implements IXposedHookLoadPackage {
                     int.class, int.class, setter));
             hooks.add(XposedHelpers.findAndHookMethod(carClass, "setFunctionValue",
                     int.class, int.class, int.class, setter));
-            hooks.add(XposedHelpers.findAndHookMethod(CAR_MANAGER + "$4", loaded.classLoader,
-                    "onFunctionValueChanged", int.class, int.class, int.class, new XC_MethodHook() {
-                        @Override protected void afterHookedMethod(MethodHookParam param) {
-                            int function = (Integer) param.args[0];
-                            if ((Integer) param.args[1] != 0) return;
-                            if (isProtectiveFunction(function) && (Integer) param.args[2] == 1) {
-                                onMain(() -> {
-                                    if (!protecting && SystemClock.elapsedRealtime() >= protectionUntil) {
-                                        finishFile("superseded by a protective HVAC mode", false);
-                                    }
-                                    protecting = true;
-                                    protectionUntil = SystemClock.elapsedRealtime() + 3000;
-                                });
+            try {
+                hooks.add(XposedHelpers.findAndHookMethod(carClass, "notifyObservers",
+                        boolean.class, new XC_MethodHook() {
+                            @Override protected void afterHookedMethod(MethodHookParam param) {
+                                wake(); // Reconnects do not reset an unresolved episode's attempts.
                             }
-                            if (function == CONTROL.function
-                                    || function == AQS || function == G_CLEAN || function == POWER
-                                    || isProtectiveFunction(function)) wake();
-                        }
-                    }));
-            hooks.add(XposedHelpers.findAndHookMethod(carClass, "notifyObservers",
-                    boolean.class, new XC_MethodHook() {
-                        @Override protected void afterHookedMethod(MethodHookParam param) {
-                            wake(); // A reconnect never resets an unresolved episode's attempts.
-                        }
-                    }));
+                        }));
+            } catch (Throwable error) {
+                report("Optional connection callback unavailable; using state polling", error);
+            }
             hooks.add(XposedHelpers.findAndHookMethod(PACKAGE + ".MyApplication", loaded.classLoader,
                     "onCreate", new XC_MethodHook() {
                         @Override protected void afterHookedMethod(MethodHookParam param) {
                             if (param.hasThrowable() || stopped || started) return;
                             try {
                                 context = (Context) param.thisObject;
+                                handler = new Handler(context.getMainLooper());
+                                files = new ControlFileMonitor(TAG, HvacCirculationHook.this::onEdit, CONTROL);
                                 preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
                                 loadChoice();
                                 manager = XposedHelpers.callStaticMethod(carClass, "getInstance");
                                 started = true;
                                 files.start();
+                                installWatcher();
                                 handler.post(poll);
                             } catch (Throwable error) {
                                 report("Could not start HVAC circulation control", error);
@@ -171,6 +160,36 @@ public final class HvacCirculationHook implements IXposedHookLoadPackage {
         } catch (Throwable error) {
             stop();
             report("Unsupported HVAC host or hook installation failed", error);
+        }
+    }
+
+    private void installWatcher() {
+        try {
+            // Anonymous-class numbering can change between firmware builds. Resolve the
+            // actual watcher instance; this optimization must never prevent file startup.
+            Object watcher = XposedHelpers.getObjectField(manager, "mWatcher");
+            XC_MethodHook.Unhook hook = XposedHelpers.findAndHookMethod(watcher.getClass(),
+                    "onFunctionValueChanged", int.class, int.class, int.class, new XC_MethodHook() {
+                        @Override protected void afterHookedMethod(MethodHookParam param) {
+                            int function = (Integer) param.args[0];
+                            if ((Integer) param.args[1] != 0) return;
+                            if (isProtectiveFunction(function) && (Integer) param.args[2] == 1) {
+                                onMain(() -> {
+                                    if (!protecting && SystemClock.elapsedRealtime() >= protectionUntil) {
+                                        finishFile("superseded by a protective HVAC mode", false);
+                                    }
+                                    protecting = true;
+                                    protectionUntil = SystemClock.elapsedRealtime() + 3000;
+                                });
+                            }
+                            if (function == CONTROL.function || function == AQS || function == G_CLEAN
+                                    || function == POWER || isProtectiveFunction(function)) wake();
+                        }
+                    });
+            if (hook == null) throw new IllegalStateException("No HVAC watcher hook returned");
+            hooks.add(hook);
+        } catch (Throwable error) {
+            report("Optional vehicle callback unavailable; file controls continue with polling", error);
         }
     }
 
@@ -473,6 +492,7 @@ public final class HvacCirculationHook implements IXposedHookLoadPackage {
     }
 
     private void onMain(Runnable action) {
+        if (!started || stopped || handler == null) return;
         Runnable guarded = () -> { if (started && !stopped) action.run(); };
         if (Looper.myLooper() == Looper.getMainLooper()) guarded.run();
         else handler.post(guarded);
@@ -512,8 +532,8 @@ public final class HvacCirculationHook implements IXposedHookLoadPackage {
 
     private void stop() {
         stopped = true;
-        handler.removeCallbacksAndMessages(null);
-        files.stop();
+        if (handler != null) handler.removeCallbacksAndMessages(null);
+        if (files != null) files.stop();
         for (XC_MethodHook.Unhook hook : hooks) if (hook != null) hook.unhook();
         hooks.clear();
     }
