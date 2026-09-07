@@ -14,8 +14,8 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 /**
- * Replays the host's saved SOC only for a mode request made by the smart-charge widget.
- * The host still decides whether a click is permitted and which mode to request.
+ * Replays saved SOC for smart-charge widget requests and remembers charge mode for restart.
+ * The host still decides whether a user click is permitted and which mode to request.
  */
 public final class BatterySocHook implements IXposedHookLoadPackage {
     private static final String PACKAGE = "ecarx.settings";
@@ -31,10 +31,11 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
     private static final String PREFERENCES = "share_car_setting";
     private static final String TARGET_KEY = "TARGET_BATTERY_KEY";
 
-    private static final int CHARGE_MODE = 0x24150600;
-    private static final int MODE_ACTIVE = 0x24150601;
-    private static final int MODE_OFF = 0x24150603;
-    private static final int TARGET_SOC = 0x24030100;
+    static final int CHARGE_MODE = 0x24150600;
+    static final int MODE_ACTIVE = 0x24150601;
+    static final int MODE_HOLD = 0x24150602;
+    static final int MODE_OFF = 0x24150603;
+    static final int TARGET_SOC = 0x24030100;
     private static final int DEFAULT_SOC = 30;
     private static final int MIN_SOC = 30;
     private static final int MAX_SOC = 85;
@@ -51,6 +52,7 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
 
         XC_MethodHook.Unhook modeHook = null;
         XC_MethodHook.Unhook widgetHook = null;
+        final BootStateRestorer restart = new BootStateRestorer();
         try {
             Class<?> managerClass = XposedHelpers.findClass(MANAGER, loaded.classLoader);
             Class<?> attrClass = XposedHelpers.findClass(ATTR, loaded.classLoader);
@@ -62,25 +64,26 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
                     carClass, "setFunctionValue", int.class, int.class, new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            WidgetClick click = currentClick.get();
-                            if (click == null || click.targetSent || param.hasThrowable()) {
+                            if (param.hasThrowable()) {
                                 return;
                             }
                             int function = (Integer) param.args[0];
                             int mode = (Integer) param.args[1];
-                            if (function != CHARGE_MODE
-                                    || (mode != MODE_ACTIVE && mode != MODE_OFF)) {
+                            if (function != CHARGE_MODE || !isChargeMode(mode)) {
                                 return;
                             }
 
-                            // Both ON and OFF clicks send the saved target. Never send SOC_HOLD.
                             // Do not use the wrapper's boolean result: this host always returns false.
                             try {
-                                if (!Boolean.TRUE.equals(XposedHelpers.callMethod(
-                                        param.thisObject, "isCarConnected"))
-                                        || XposedHelpers.getObjectField(
-                                                param.thisObject, "mCarFunction") == null) {
+                                if (!isCarReady(param.thisObject)) {
                                     Log.w(TAG, "Skipped target: car service is disconnected");
+                                    return;
+                                }
+                                // Remember requests from both widgets and the settings page.
+                                // Startup/default value callbacks are deliberately not persisted.
+                                restart.onModeRequested(param.thisObject, mode);
+                                WidgetClick click = currentClick.get();
+                                if (click == null || click.targetSent || mode == MODE_HOLD) {
                                     return;
                                 }
                                 int target = readTarget(click.context);
@@ -135,6 +138,8 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
                 throw new IllegalStateException("Framework did not install both hooks");
             }
 
+            restart.install(loaded.classLoader, carClass);
+
             // Some LSPosed versions expose this extension. It prevents an optimized caller
             // from retaining an inlined copy of setFunctionValue; API 82 does not declare it.
             try {
@@ -149,6 +154,7 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
 
             XposedBridge.log(TAG + ": installed for " + loaded.processName);
         } catch (Throwable error) {
+            restart.stop();
             if (widgetHook != null) {
                 widgetHook.unhook();
             }
@@ -159,7 +165,16 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
         }
     }
 
-    private static int readTarget(Context context) {
+    static boolean isChargeMode(int mode) {
+        return mode == MODE_ACTIVE || mode == MODE_HOLD || mode == MODE_OFF;
+    }
+
+    static boolean isCarReady(Object manager) {
+        return Boolean.TRUE.equals(XposedHelpers.callMethod(manager, "isCarConnected"))
+                && XposedHelpers.getObjectField(manager, "mCarFunction") != null;
+    }
+
+    static int readTarget(Context context) {
         SharedPreferences preferences =
                 context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
         int stored = preferences.getInt(TARGET_KEY, DEFAULT_SOC);
@@ -170,7 +185,7 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
         return target;
     }
 
-    private static void logFailure(String message, Throwable error) {
+    static void logFailure(String message, Throwable error) {
         Log.e(TAG, message, error);
         XposedBridge.log(TAG + ": " + message + " (" + error + ")");
     }
