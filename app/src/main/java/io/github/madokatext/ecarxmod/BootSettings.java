@@ -11,6 +11,7 @@ final class BootSettings {
     static final String READ = "read_boot_settings";
     static final String ENABLED = "force_hev_on_boot";
     static final String DELAY = "boot_delay_seconds";
+    static final String DISABLE_LOW_SPEED = "disable_low_speed_warning_on_boot";
     static final int MIN_DELAY = 5;
     static final int MAX_DELAY = 300;
 
@@ -27,6 +28,7 @@ final class BootSettings {
         SharedPreferences preferences = preferences(context);
         Bundle result = new Bundle();
         result.putBoolean(ENABLED, preferences.getBoolean(ENABLED, true));
+        result.putBoolean(DISABLE_LOW_SPEED, preferences.getBoolean(DISABLE_LOW_SPEED, true));
         result.putInt(DELAY, clampDelay(preferences.getInt(DELAY, MIN_DELAY)));
         return result;
     }

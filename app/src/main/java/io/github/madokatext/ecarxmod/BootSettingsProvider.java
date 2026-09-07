@@ -6,7 +6,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 
-/** Exposes only two non-sensitive settings. External callers cannot modify them. */
+/** Exposes only boot options. External callers cannot modify them. */
 public final class BootSettingsProvider extends ContentProvider {
     @Override public boolean onCreate() { return true; }
 

@@ -37,6 +37,7 @@ final class BootHevGate {
     private static final int SAVE = 0x22040d03;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Runnable wake;
+    private final BootLowSpeedAction lowSpeed;
     private HandlerThread loaderThread;
     private Handler loader;
     private Context context;
@@ -54,8 +55,9 @@ final class BootHevGate {
     private int writes;
     private int lastSynced = -1;
 
-    BootHevGate(Runnable wake) {
+    BootHevGate(Runnable wake, BootLowSpeedAction lowSpeed) {
         this.wake = wake;
+        this.lowSpeed = lowSpeed;
     }
 
     void attach(Context host) {
@@ -78,6 +80,7 @@ final class BootHevGate {
                 // Binder/provider startup must not block the settings app's main thread.
                 settings = context.getContentResolver().call(BootSettings.URI, BootSettings.READ, null, null);
                 if (settings == null || !settings.containsKey(BootSettings.ENABLED)
+                        || !settings.containsKey(BootSettings.DISABLE_LOW_SPEED)
                         || !settings.containsKey(BootSettings.DELAY)) {
                     throw new IllegalStateException("Module boot settings are unavailable");
                 }
@@ -114,11 +117,13 @@ final class BootHevGate {
         if (stopped) return;
         try {
             if (settings != null) {
-                commit(state.edit().putString(BOOT_ID, id)
+                SharedPreferences.Editor editor = state.edit().putString(BOOT_ID, id)
                         .putString(STATUS, cancelled ? CANCELLED : WAITING)
                         .putBoolean(ENABLED, settings.getBoolean(BootSettings.ENABLED))
                         .putInt(DELAY, BootSettings.clampDelay(settings.getInt(BootSettings.DELAY)))
-                        .putLong(STARTED, startedAt).putInt(WRITES, 0).putLong(LAST_WRITE, 0));
+                        .putLong(STARTED, startedAt).putInt(WRITES, 0).putLong(LAST_WRITE, 0);
+                lowSpeed.initializeForBoot(editor, settings.getBoolean(BootSettings.DISABLE_LOW_SPEED));
+                commit(editor);
             }
             enabled = state.getBoolean(ENABLED, true);
             dueAt = state.getLong(STARTED, startedAt)

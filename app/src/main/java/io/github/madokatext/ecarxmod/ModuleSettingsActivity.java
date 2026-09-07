@@ -34,6 +34,14 @@ public final class ModuleSettingsActivity extends Activity {
         enabled.setChecked(saved.getBoolean(BootSettings.ENABLED));
         body.addView(enabled, matchWidth());
 
+        Switch disableLowSpeed = new Switch(this);
+        disableLowSpeed.setId(1003);
+        disableLowSpeed.setText(R.string.disable_low_speed_label);
+        disableLowSpeed.setTextSize(22);
+        disableLowSpeed.setMinimumHeight(dp(72));
+        disableLowSpeed.setChecked(saved.getBoolean(BootSettings.DISABLE_LOW_SPEED, true));
+        body.addView(disableLowSpeed, matchWidth());
+
         TextView delayLabel = text("", 22);
         body.addView(delayLabel);
         SeekBar delay = new SeekBar(this);
@@ -74,6 +82,7 @@ public final class ModuleSettingsActivity extends Activity {
         save.setOnClickListener(view -> {
             boolean success = BootSettings.preferences(this).edit()
                     .putBoolean(BootSettings.ENABLED, enabled.isChecked())
+                    .putBoolean(BootSettings.DISABLE_LOW_SPEED, disableLowSpeed.isChecked())
                     .putInt(BootSettings.DELAY, delay.getProgress() + BootSettings.MIN_DELAY).commit();
             Toast.makeText(this, success ? R.string.boot_settings_saved : R.string.boot_settings_save_failed,
                     Toast.LENGTH_LONG).show();
@@ -85,7 +94,9 @@ public final class ModuleSettingsActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle state) {
         Switch enabled = findViewById(1001);
         SeekBar delay = findViewById(1002);
+        Switch disableLowSpeed = findViewById(1003);
         state.putBoolean(BootSettings.ENABLED, enabled.isChecked());
+        state.putBoolean(BootSettings.DISABLE_LOW_SPEED, disableLowSpeed.isChecked());
         state.putInt(BootSettings.DELAY, delay.getProgress() + BootSettings.MIN_DELAY);
         super.onSaveInstanceState(state);
     }

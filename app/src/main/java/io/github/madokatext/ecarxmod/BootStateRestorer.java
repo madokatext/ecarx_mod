@@ -34,7 +34,8 @@ final class BootStateRestorer {
     private final AtomicInteger requestRevision = new AtomicInteger();
     private final List<XC_MethodHook.Unhook> hooks = new ArrayList<>();
     private final Runnable attempt = this::restoreIfReady;
-    private final BootHevGate hevGate = new BootHevGate(this::wakeAfterConfiguration);
+    private final BootLowSpeedAction lowSpeed = new BootLowSpeedAction();
+    private final BootHevGate hevGate = new BootHevGate(this::wakeAfterConfiguration, lowSpeed);
     private Context context;
     private Object carManager;
     private boolean pending;
@@ -45,6 +46,7 @@ final class BootStateRestorer {
     private int readinessPolls;
     private long chargeConfirmAfter;
     private int lastSyncedMode = UNKNOWN;
+    private boolean chargeRestored;
 
     void install(ClassLoader loader, Class<?> carClass) {
         hooks.add(XposedHelpers.findAndHookMethod("ecarx.settings.App", loader,
@@ -96,6 +98,7 @@ final class BootStateRestorer {
     private synchronized void attach(Context host) {
         Context application = host.getApplicationContext();
         context = application != null ? application : host;
+        lowSpeed.attach(context);
         hevGate.attach(context);
     }
 
@@ -104,13 +107,19 @@ final class BootStateRestorer {
     }
 
     void onExternalRequest(int function) {
-        if (isRestoring() || (function != EPT_MODE && function != BatterySocHook.CHARGE_MODE
-                && function != BatterySocHook.TARGET_SOC)) return;
+        if (isRestoring()) return;
+        if (function == VehicleControl.LOW_SPEED_WARNING.function) {
+            lowSpeed.cancel();
+            return;
+        }
+        if (function != EPT_MODE && function != BatterySocHook.CHARGE_MODE
+                && function != BatterySocHook.TARGET_SOC) return;
         requestRevision.incrementAndGet();
         synchronized (this) {
             pending = false;
             handler.removeCallbacks(attempt);
             hevGate.cancel();
+            lowSpeed.cancel();
         }
     }
 
@@ -147,6 +156,11 @@ final class BootStateRestorer {
         pending = false;
         handler.removeCallbacks(attempt);
         hevGate.cancel();
+        lowSpeed.cancel();
+    }
+
+    void takeFileLowSpeedControl() {
+        lowSpeed.cancel();
     }
 
     synchronized void rememberFileMode(int actual) {
@@ -172,6 +186,7 @@ final class BootStateRestorer {
                     writes = 0;
                     targetWrites = 0;
                     chargeConfirmAfter = 0;
+                    chargeRestored = false;
                 }
                 pending = true;
                 readinessPolls = 0;
@@ -215,6 +230,10 @@ final class BootStateRestorer {
             }
             if (gate == BootHevGate.Result.WAIT) {
                 schedule(hevGate.nextDelayMs());
+                return;
+            }
+            if (chargeRestored) {
+                runLowSpeedStage();
                 return;
             }
             long remaining = chargeConfirmAfter - SystemClock.elapsedRealtime();
@@ -287,8 +306,10 @@ final class BootStateRestorer {
             }
 
             if (actual == desired) {
-                pending = false;
+                chargeRestored = true;
                 Log.i(TAG, "Restart mode readback matched: 0x" + Integer.toHexString(desired));
+                // Continue on the next main-loop pass; do not apply the startup delay twice.
+                schedule(100);
             } else {
                 schedule(1000);
             }
@@ -307,6 +328,21 @@ final class BootStateRestorer {
             Log.e(TAG, "Could not persist requested charge mode");
         } else {
             Log.i(TAG, "Remembered charge mode=0x" + Integer.toHexString(mode));
+        }
+    }
+
+    private void runLowSpeedStage() {
+        boolean finished;
+        restoring.set(true);
+        try {
+            finished = lowSpeed.step(carManager);
+        } finally {
+            restoring.remove();
+        }
+        if (finished) {
+            pending = false;
+        } else {
+            schedule(lowSpeed.nextDelayMs());
         }
     }
 
@@ -348,6 +384,7 @@ final class BootStateRestorer {
         pending = false;
         handler.removeCallbacksAndMessages(null);
         hevGate.stop();
+        lowSpeed.stop();
         for (XC_MethodHook.Unhook hook : hooks) {
             if (hook != null) {
                 hook.unhook();

@@ -1,6 +1,6 @@
 # ECARX 保电修复
 
-用于 Android 9 车机、LSPosed API 93 的模块，作用域为 `ecarx.settings`。当前版本 **1.3.1**：修复设置页使用 Android 10 API 导致的启动闪退，并将编译 SDK 限定为 Android 9／API 28。保留可配置的开机 HEV 切换、**5–300 秒**延时、保电恢复与目标补发、文件控制及实际状态同步功能。
+用于 Android 9 车机、LSPosed API 93 的模块，作用域为 `ecarx.settings`。当前版本 **1.4.0**：新增“保电恢复后关闭低速行驶提示”设置开关，与开机 HEV、保电恢复共用 **5–300 秒**延时，按顺序执行。保留 API 28 编译限制、设置页兼容性修复、目标电量补发、文件控制及实际状态同步功能。
 
 适配依据是 XCSettings2 **3.0.0.0064（versionCode 3000064）** 的类名、方法和功能 ID。按需求未执行单元测试、设备测试或实车验证；GitHub Actions 只编译和打包 APK。
 
@@ -11,8 +11,8 @@
 1. 打开本仓库 [Actions](https://github.com/madokatext/ecarx_mod/actions/workflows/build-apk.yml)，选择成功的 **Build APK** 运行。
 2. 下载运行页面下方的 `ecarx-mod-apk-...` artifact，解压后安装 APK。
 3. 在 LSPosed 中启用 **ECARX 保电修复**，勾选 **ecarx.settings**。模块已声明这个推荐作用域，无需勾选系统框架或桌面应用。
-4. 打开桌面的 **ECARX 保电修复**，或从 LSPosed 的模块设置入口打开设置页，选择“每次开机先切换 HEV”和开机执行延时，点击 **保存设置**。
-5. 重启车机，使目标进程重新加载模块。设置保存后从下一次车机重启生效；默认开启先切换 HEV，默认延时 5 秒。
+4. 打开桌面的 **ECARX 保电修复**，或从 LSPosed 的模块设置入口打开设置页，选择“每次开机先切换 HEV”“保电恢复后关闭低速行驶提示”和开机执行延时，点击 **保存设置**。
+5. 重启车机，使目标进程重新加载模块。设置保存后从下一次车机重启生效；两个功能开关默认开启，共享的开机延时默认 5 秒。
 6. 保电目标继续在原车“动力电池”页面设置。负一屏和设置页的保电模式切换都会被记忆；重启后按配置执行 HEV 与保电恢复。
 
 首次安装本版本尚无开关历史时，采用车辆首次返回的有效保电模式作为初始记忆，不默认强制开启。此后操作一次原车保电开关，就会记录新的状态。
@@ -21,13 +21,14 @@
 
 Actions 默认生成 **debug 签名、可安装的 APK**，不需要配置仓库密钥。不同运行的临时 debug 签名可能不同；遇到签名不一致而不能覆盖安装时，先卸载旧的本模块再安装。原车 `ecarx.settings` 及其保电设置不属于本模块数据。
 
-## 开机 HEV 与延时设置
+## 开机顺序与共享延时设置
 
 模块设置页包含：
 
 | 设置 | 默认值 | 作用 |
 | --- | --- | --- |
 | 每次开机先切换 HEV | 开启 | 延时结束后先确认 HEV，再允许恢复保电 |
+| 保电恢复后关闭低速行驶提示 | 开启 | 保电模式回读匹配、目标已补发后，关闭低速行驶提示 |
 | 开机执行延时 | 5 秒 | 5–300 秒，滑块按 1 秒调节，提供 5、30、60、180、300 秒快捷按钮 |
 
 延时从**本次开机第一次 `ecarx.settings` 启动**开始计时。开启 HEV 选项时的顺序：
@@ -37,16 +38,20 @@ Actions 默认生成 **debug 签名、可安装的 APK**，不需要配置仓库
   → 等待车辆服务和点火 ON / START / DRIVING
   → 切换 HEV，等待车辆接口回读确认
   → 按上次记忆恢复保电模式，补发保存的目标电量
+  → 关闭低速行驶提示（开关启用时），等待关闭状态回读确认
   → 通过实际回读同步原设置界面和状态文件
 ```
 
 - 若车辆已返回 HEV，直接进入保电恢复，不重复发送 HEV 请求。关闭 HEV 选项时，延时后按当前驾驶模式恢复保电，不主动切换 EV/HEV。
+- 三个步骤**只共用一次开机延时**，保电恢复后不再等待一轮 5–300 秒。低速提示关闭在保电模式确认、目标补发请求完成后进入；如果前面的 HEV 或保电恢复尚未完成、失败或被用户取消，不提前执行低速提示关闭。
+- 关闭低速提示使用原开关属性 `0x201a0100`、值 `0`，不修改提示音等级。最多发送 **2 次（首次加一次重试）**，每次下发后至少等待 1 秒回读；进入该阶段后最多等待车辆条件 60 秒。车辆已经回读关闭时直接完成，不重复发送。
+- 低速提示自动关闭的开关快照、完成/取消状态和发送次数与系统开机标识一起持久化。同一次开机中，设置进程重启或服务重连不会重置其重试次数；完成后用户重新开启提示，也不会被模块反复关闭。关闭设置页中的该选项后，下次开机跳过此步骤。
 - 使用系统开机计数，必要时使用内核 boot ID，识别一次真正的系统重启。执行状态、计时起点和 HEV 请求次数在原应用中落盘；同一开机期间的进程重启或服务重连不重复强制切换 HEV，也不重新从零计时或重置 HEV 重试次数。
 - HEV 请求发送后至少等待 1 秒确认，最多发送 **2 次（首次加一次重试）**。延时结束后最多主动等待车辆条件 60 秒；HEV 未确认、条件超时或配置无法读取时，停止这一轮自动恢复，不抢先下发保电请求。
 - 保电开启仍要求 HEV/SAVE 和舒适模式；不改动驾驶模式。保电开启和关闭都补发原应用保存的 30–85% 目标；HOLD 保持原有含义。
-- 手动切换 EV/HEV、保电或调节保电目标，以及有效的 EV/HEV、保电文件指令，会取消待执行的开机流程。模块自己的恢复请求不会被当作手动操作。
-- HEV 和保电回读通过原 `CarFuncManager.mWatcher` 分发，刷新原设置页、Kanzi 和已有 Widget 观察者。文件状态同步仍每秒运行；未确认的请求值不会被用于伪造界面状态。
-- 开关和延时保存在本模块的设备保护存储，通过只读 ContentProvider 提供给注入进程；不依赖六个控制/状态文件。设置页只保存配置，保存动作不立即切换车辆。卸载本模块会清除这两个配置，下次安装恢复默认值。
+- 手动切换 EV/HEV、保电或调节保电目标，以及有效的 EV/HEV、保电文件指令，会取消待执行的开机流程。手动或文件控制低速提示，只取消本次开机的低速提示自动关闭，不中断前面的 HEV/保电恢复。模块自己的恢复请求不会被当作手动操作。
+- HEV、保电和低速提示回读通过原 `CarFuncManager.mWatcher` 分发，刷新原设置页、Kanzi 和已有 Widget 观察者。文件状态同步仍每秒运行；未确认的请求值不会被用于伪造界面状态。低速提示实际状态继续反映在 `/sdcard/ecarx_mod/low_speed_warning_state.txt`。
+- 两个功能开关和共享延时保存在本模块的设备保护存储，通过只读 ContentProvider 提供给注入进程；不依赖六个控制/状态文件。设置页只保存配置，保存动作不立即切换车辆。卸载本模块会清除这些配置，下次安装恢复默认值。
 
 ## 文件控制与状态
 
@@ -190,6 +195,6 @@ Restart restore mode=0x24150601; requested target SOC=60%
 Restart mode readback matched: 0x24150601
 ```
 
-核心代码：[BatterySocHook.java](app/src/main/java/io/github/madokatext/ecarxmod/BatterySocHook.java)、[BootHevGate.java](app/src/main/java/io/github/madokatext/ecarxmod/BootHevGate.java)、[BootStateRestorer.java](app/src/main/java/io/github/madokatext/ecarxmod/BootStateRestorer.java)、[ModuleSettingsActivity.java](app/src/main/java/io/github/madokatext/ecarxmod/ModuleSettingsActivity.java)、[BootSettingsProvider.java](app/src/main/java/io/github/madokatext/ecarxmod/BootSettingsProvider.java)、[FileCommandController.java](app/src/main/java/io/github/madokatext/ecarxmod/FileCommandController.java)、[ControlFileMonitor.java](app/src/main/java/io/github/madokatext/ecarxmod/ControlFileMonitor.java)。
+核心代码：[BatterySocHook.java](app/src/main/java/io/github/madokatext/ecarxmod/BatterySocHook.java)、[BootHevGate.java](app/src/main/java/io/github/madokatext/ecarxmod/BootHevGate.java)、[BootStateRestorer.java](app/src/main/java/io/github/madokatext/ecarxmod/BootStateRestorer.java)、[BootLowSpeedAction.java](app/src/main/java/io/github/madokatext/ecarxmod/BootLowSpeedAction.java)、[ModuleSettingsActivity.java](app/src/main/java/io/github/madokatext/ecarxmod/ModuleSettingsActivity.java)、[BootSettingsProvider.java](app/src/main/java/io/github/madokatext/ecarxmod/BootSettingsProvider.java)、[FileCommandController.java](app/src/main/java/io/github/madokatext/ecarxmod/FileCommandController.java)、[ControlFileMonitor.java](app/src/main/java/io/github/madokatext/ecarxmod/ControlFileMonitor.java)。
 
 接口使用参考：[Xposed API](https://github.com/rovo89/XposedBridge/wiki/Using-the-Xposed-Framework-API)、[LSPosed 作用域](https://github.com/LSPosed/LSPosed/wiki/Module-Scope)、[AGP 8.7 兼容性](https://developer.android.com/build/releases/agp-8-7-0-release-notes)。

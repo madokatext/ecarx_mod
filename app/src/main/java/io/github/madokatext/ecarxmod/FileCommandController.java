@@ -89,6 +89,8 @@ final class FileCommandController {
                     || !files.isCurrent(control, snapshot)) return;
             if (control == VehicleControl.SMART_CHARGE || control == VehicleControl.EV_HEV) {
                 restart.takeFileModeControl();
+            } else if (control == VehicleControl.LOW_SPEED_WARNING) {
+                restart.takeFileLowSpeedControl();
             }
             Request request = new Request(control, snapshot,
                     value == 1 ? control.on : control.off, revision);
