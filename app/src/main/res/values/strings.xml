@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ECARX 保电修复</string>
-    <string name="module_description">记忆并恢复上次保电状态，重启及负一屏切换智能保电时补发目标电量。</string>
+    <string name="module_description">恢复保电状态并补发目标电量；通过文本文件控制 EV/HEV、智能保电和低速提示，另提供实际状态文件。</string>
     <string-array name="xposed_scope">
         <item>ecarx.settings</item>
     </string-array>

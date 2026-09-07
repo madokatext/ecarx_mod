@@ -25,7 +25,7 @@ final class BootStateRestorer {
     private static final int EPT_SAVE = 0x22040d03;
     private static final int DRIVE_MODE = 0x22010100;
     private static final int COMFORT = 0x22010102;
-    private static final int MAX_WRITES = 5;
+    private static final int MAX_WRITES = 2;
     private static final int MAX_READINESS_POLLS = 10;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -37,7 +37,9 @@ final class BootStateRestorer {
     private Object carManager;
     private boolean pending;
     private boolean stopped;
+    private boolean fileModeOwned;
     private int writes;
+    private int targetWrites;
     private int readinessPolls;
 
     void install(ClassLoader loader, Class<?> carClass) {
@@ -93,7 +95,7 @@ final class BootStateRestorer {
     }
 
     void onModeRequested(Object manager, int mode) {
-        if (Boolean.TRUE.equals(restoring.get())) {
+        if (isRestoring()) {
             return;
         }
         requestRevision.incrementAndGet();
@@ -103,6 +105,7 @@ final class BootStateRestorer {
             }
             // User intent wins immediately over a queued boot restore or confirmation retry.
             pending = false;
+            fileModeOwned = false;
             handler.removeCallbacks(attempt);
             carManager = manager;
             try {
@@ -114,17 +117,38 @@ final class BootStateRestorer {
         }
     }
 
+    boolean isRestoring() {
+        return Boolean.TRUE.equals(restoring.get());
+    }
+
+    synchronized void takeFileModeControl() {
+        requestRevision.incrementAndGet();
+        fileModeOwned = true;
+        pending = false;
+        handler.removeCallbacks(attempt);
+    }
+
+    synchronized void rememberFileMode(int actual) {
+        if (stopped || context == null || !BatterySocHook.isChargeMode(actual)) return;
+        try {
+            saveMode(actual);
+        } catch (Throwable error) {
+            BatterySocHook.logFailure("Could not remember confirmed file mode", error);
+        }
+    }
+
     private void onConnectionChanged(Object manager, boolean connected) {
         int revision = requestRevision.get();
         // Do not hold a lock or write vehicle properties inside a Binder callback.
         handler.post(() -> {
             synchronized (BootStateRestorer.this) {
-                if (stopped || revision != requestRevision.get()) {
+                if (stopped || fileModeOwned || revision != requestRevision.get()) {
                     return;
                 }
                 carManager = manager;
                 pending = true;
                 writes = 0;
+                targetWrites = 0;
                 readinessPolls = 0;
                 handler.removeCallbacks(attempt);
                 if (connected) {
@@ -203,9 +227,10 @@ final class BootStateRestorer {
                     writes++;
                     write(BatterySocHook.CHARGE_MODE, desired);
                 }
-                if (desired != BatterySocHook.MODE_HOLD) {
+                if (desired != BatterySocHook.MODE_HOLD && targetWrites < MAX_WRITES) {
                     // Replay even if the vehicle already has the desired switch state.
                     // When a mode change is confirmed on a later pass, replay again after it.
+                    targetWrites++;
                     write(BatterySocHook.TARGET_SOC, target);
                     Log.i(TAG, "Restart restore mode=0x" + Integer.toHexString(desired)
                             + "; requested target SOC=" + target + "%");

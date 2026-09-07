@@ -1,6 +1,6 @@
 # ECARX 保电修复
 
-用于 Android 9 车机、LSPosed API 93 的模块，作用域为 `ecarx.settings`。当前版本 **1.1.0**：车机重启后恢复上次保电开关状态，并补发保存的保电目标电量；负一屏切换智能保电时也继续补发目标。
+用于 Android 9 车机、LSPosed API 93 的模块，作用域为 `ecarx.settings`。当前版本 **1.2.0**：通过文本文件控制 EV/HEV、智能保电和低速行驶提示，读取有效指令后立即清空；另提供三个实际状态文件。保留重启恢复保电开关、重启及负一屏切换时补发目标电量的功能。
 
 适配依据是 XCSettings2 **3.0.0.0064（versionCode 3000064）** 的类名、方法和功能 ID。按需求未执行单元测试、设备测试或实车验证；GitHub Actions 只编译和打包 APK。
 
@@ -18,6 +18,54 @@
 
 Actions 默认生成 **debug 签名、可安装的 APK**，不需要配置仓库密钥。不同运行的临时 debug 签名可能不同；遇到签名不一致而不能覆盖安装时，先卸载旧的本模块再安装。原车 `ecarx.settings` 及其保电设置不属于本模块数据。
 
+## 文件控制与状态
+
+模块随 `ecarx.settings` 启动，在车机 **`/sdcard/ecarx_mod/`** 下创建六个 `.txt` 文件，不需要打开设置页面。文件操作使用原车设置应用的身份；适配的原应用已声明外部存储写权限。存储尚不可用时会等待并重试访问。
+
+| 控制文件：用户写入 | 实际状态文件：模块更新 | `0` | `1` |
+| --- | --- | --- | --- |
+| `ev_hev.txt` | `ev_hev_state.txt` | EV | HEV |
+| `smart_charge.txt` | `smart_charge_state.txt` | 智能保电关闭 | 智能保电开启 |
+| `low_speed_warning.txt` | `low_speed_warning_state.txt` | 低速行驶提示关闭 | 低速行驶提示开启 |
+
+### 控制文件
+
+- 缺失的控制文件在模块启动初始化时创建为空。现有内容只作为启动基线，不因启动或服务重连而重新执行；模块运行后写入才触发指令。
+- 每 **500 ms** 检查一次内容和文件属性。检测到有效 `0` 或 `1` 后，在同一次处理内**立即清空文件，再安排车辆指令**。后续再次写入相同的值，也算一条新指令。模块清空造成的变化不会被当成用户写入。
+- 支持 **GBK、UTF-8、带 BOM 的 UTF-8**，允许字符前后的空格、回车和换行。只接受单个 `0` 或 `1`；空文件、其他文字、多位数字和超过 128 字节的内容不执行，也不自动清空。
+- 清空表示指令已读取，不表示车辆已执行成功。模块不会向控制文件写回 `0` 或 `1`；实际结果请看对应的 `_state.txt`。
+- 新写入或原设置应用对同一功能的操作会取消旧指令及其剩余重试。删除控制文件也会取消；运行中不自动重建被删除的控制文件，用户可自行重新创建。
+- 同一文件逐次写入，看到清空后再写下一条。它是单个指令入口，不是保存多条指令的队列；轮询间隔内的连续覆盖可能只读取最后一次内容。
+
+例如在车机 shell 中写入：
+
+```sh
+echo 1 > /sdcard/ecarx_mod/ev_hev.txt
+echo 1 > /sdcard/ecarx_mod/smart_charge.txt
+echo 0 > /sdcard/ecarx_mod/low_speed_warning.txt
+```
+
+上述内容分别请求 HEV、开启智能保电、关闭低速行驶提示。也可以直接用文本编辑器修改对应文件并保存。
+
+### 下发、确认与重试
+
+- EV/HEV 使用 `0x22040d00`，写入 EV `0x22040d02` 或 HEV `0x22040d01`。低速提示使用开关属性 **`0x201a0100`**，不改动提示音等级。
+- 开启或关闭智能保电时，均读取原应用 `share_car_setting / TARGET_BATTERY_KEY`，随模式指令补发当前保存的目标电量，仍限制在 30–85%。
+- 保留原功能的车辆条件：EV/HEV 等待点火 ON/START/DRIVING；智能保电开启等待 HEV/SAVE 和舒适模式；低速提示在 OFF/ACC 或未知点火状态不下发。最多等待 15 秒，条件不满足就结束，需再次写入发起新请求。
+- 每次请求后约 1 秒读取车辆接口确认。**每条指令最多发送两次，即首次发送加一次重试**；智能保电的模式和附带目标各最多两次，不会因文件仍为空、状态不匹配或服务重连而持续重发。
+- 原 `setFunctionValue()` 包装方法固定返回 `false`，不能用它判断失败。模块使用 `getFunctionValue()` 确认；智能保电同时核对模式与目标电量。目标不支持回读时记录“未确认”，最多重试一次后结束，不假定成功。
+- 根据有效车辆回读，调用原应用 `CarFuncManager.mWatcher.onFunctionValueChanged()` 分发，更新设置页、Kanzi、负一屏等已有观察者和它们的内部状态。不会把失败的请求值伪装成车辆状态。
+- 文件发出的智能保电请求，只有有效回读模式才进入重启记忆。接收该类文件指令后，本次进程的旧启动恢复任务及服务重连恢复会让出控制，防止额外补发；再次手动操作原保电开关或下次启动后沿用正常恢复机制。
+
+### 实际状态文件
+
+- 每 **1 秒**主动读取三个车辆属性；车辆状态发生变化时更新对应文件，因此原设置页、负一屏等来源的操作也会反映出来。只在内容需要变化、文件丢失或被外部修改时写入。
+- 有效状态为单字节 `0` 或 `1`，无 BOM、无换行，GBK 与 UTF-8 均可读取。未知值、读取失败或车辆服务断开时写为空，避免继续展示过期状态。
+- 智能保电处于 **HOLD／电量保持** 模式时，`smart_charge_state.txt` 为 `0`，与原设置页“智能保电”开关关闭一致；此文件不表示 HOLD 开关状态。
+- EV/HEV 返回 **SAVE** 等不能映射为 EV 或 HEV 的模式时，`ev_hev_state.txt` 留空，不冒充 HEV。
+- 状态文件只展示车辆接口实际回读，不用于下发指令。手动修改它们不会控制车辆，下一轮同步会恢复回读值。
+- 同步依赖 `ecarx.settings` 进程运行；进程退出或车机断电后，磁盘上可能保留最后一次内容，下次进程启动后重新读取更新。文件不是车辆控制器的独立实时接口。
+
 ## 修复逻辑
 
 ### 重启后恢复保电状态
@@ -28,7 +76,7 @@ Actions 默认生成 **debug 签名、可安装的 APK**，不需要配置仓库
 - 保留驾驶模式约束。恢复开启状态时等待 HEV/SAVE 和舒适模式，不主动切换 EV/HEV 或驾驶模式；如果尚未满足条件，等待相应状态事件后继续。恢复关闭不要求开启条件。
 - 先读取目标，再恢复模式，随后补发目标值。**即使读到的开关状态已经与记忆一致，也会补发目标电量。** 若发生模式切换，在后续模式读回匹配时再次补发，覆盖模式切换可能重置目标的时序。
 - 智能保电的开启和关闭都补发目标，范围仍是 30–85%。恢复“电量保持”只恢复 HOLD 模式，不用预设目标干预其保持当前电量的含义。
-- 等待启动数据最多主动轮询 10 次，之后由车辆连接/驾驶模式事件唤醒；模式请求最多发送 5 次，避免无限重发。确认模式匹配后结束本轮恢复，不持续强制锁定模式。
+- 等待启动数据最多主动轮询 10 次，之后由车辆连接/驾驶模式事件唤醒；每轮恢复的模式及目标请求各最多发送 2 次，避免无限重发。确认模式匹配后结束本轮恢复，不持续强制锁定模式。
 - 用户在恢复期间重新操作保电开关时，取消旧恢复及其后续重试，保存新选择。模块自己的恢复请求不会反过来被记录为新的用户操作。
 - 状态保存在原车应用的数据目录中，不依赖模块自身的界面或存储；卸载本模块不会清除这份记录，清除原车应用数据才会清除。
 
@@ -112,6 +160,6 @@ Restart restore mode=0x24150601; requested target SOC=60%
 Restart mode readback matched: 0x24150601
 ```
 
-核心代码：[BatterySocHook.java](app/src/main/java/io/github/madokatext/ecarxmod/BatterySocHook.java)、[BootStateRestorer.java](app/src/main/java/io/github/madokatext/ecarxmod/BootStateRestorer.java)。
+核心代码：[BatterySocHook.java](app/src/main/java/io/github/madokatext/ecarxmod/BatterySocHook.java)、[BootStateRestorer.java](app/src/main/java/io/github/madokatext/ecarxmod/BootStateRestorer.java)、[FileCommandController.java](app/src/main/java/io/github/madokatext/ecarxmod/FileCommandController.java)、[ControlFileMonitor.java](app/src/main/java/io/github/madokatext/ecarxmod/ControlFileMonitor.java)、[VehicleControl.java](app/src/main/java/io/github/madokatext/ecarxmod/VehicleControl.java)。
 
 接口使用参考：[Xposed API](https://github.com/rovo89/XposedBridge/wiki/Using-the-Xposed-Framework-API)、[LSPosed 作用域](https://github.com/LSPosed/LSPosed/wiki/Module-Scope)、[AGP 8.7 兼容性](https://developer.android.com/build/releases/agp-8-7-0-release-notes)。

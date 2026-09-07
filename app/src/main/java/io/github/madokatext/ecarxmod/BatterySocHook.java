@@ -53,6 +53,7 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
         XC_MethodHook.Unhook modeHook = null;
         XC_MethodHook.Unhook widgetHook = null;
         final BootStateRestorer restart = new BootStateRestorer();
+        final FileCommandController fileControl = new FileCommandController(restart);
         try {
             Class<?> managerClass = XposedHelpers.findClass(MANAGER, loaded.classLoader);
             Class<?> attrClass = XposedHelpers.findClass(ATTR, loaded.classLoader);
@@ -63,8 +64,13 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
             modeHook = XposedHelpers.findAndHookMethod(
                     carClass, "setFunctionValue", int.class, int.class, new XC_MethodHook() {
                         @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            fileControl.onHostRequest((Integer) param.args[0]);
+                        }
+
+                        @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            if (param.hasThrowable()) {
+                            if (param.hasThrowable() || fileControl.isDispatching()) {
                                 return;
                             }
                             int function = (Integer) param.args[0];
@@ -139,6 +145,7 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
             }
 
             restart.install(loaded.classLoader, carClass);
+            fileControl.install(loaded.classLoader, carClass);
 
             // Some LSPosed versions expose this extension. It prevents an optimized caller
             // from retaining an inlined copy of setFunctionValue; API 82 does not declare it.
@@ -154,6 +161,7 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
 
             XposedBridge.log(TAG + ": installed for " + loaded.processName);
         } catch (Throwable error) {
+            fileControl.stop();
             restart.stop();
             if (widgetHook != null) {
                 widgetHook.unhook();
