@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ECARX 保电修复</string>
+    <string name="module_description">负一屏切换智能保电时，同步车机保存的目标电量。</string>
+    <string-array name="xposed_scope">
+        <item>ecarx.settings</item>
+    </string-array>
+</resources>
