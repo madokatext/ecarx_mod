@@ -2,6 +2,7 @@ package io.github.madokatext.ecarxmod;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -48,6 +49,7 @@ public final class HvacCirculationHook implements IXposedHookLoadPackage {
     private final ControlFileMonitor files = new ControlFileMonitor(this::onEdit, CONTROL);
     // All mutable controller state below is owned by the main looper.
     private Object manager;
+    private Context context;
     private SharedPreferences preferences;
     private volatile boolean started;
     private volatile boolean stopped;
@@ -148,7 +150,7 @@ public final class HvacCirculationHook implements IXposedHookLoadPackage {
                         @Override protected void afterHookedMethod(MethodHookParam param) {
                             if (param.hasThrowable() || stopped || started) return;
                             try {
-                                Context context = (Context) param.thisObject;
+                                context = (Context) param.thisObject;
                                 preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
                                 loadChoice();
                                 manager = XposedHelpers.callStaticMethod(carClass, "getInstance");
@@ -307,6 +309,9 @@ public final class HvacCirculationHook implements IXposedHookLoadPackage {
             actual = read(CONTROL.function);
             publish(actual);
             long now = SystemClock.elapsedRealtime();
+            // Read on every synchronization instead of caching an enabled boot snapshot.
+            // A missing key/provider or any read error means OFF, including upgrades.
+            boolean correctionEnabled = readCorrectionEnabled();
             boolean protectedMode = protectionOn(FRONT_DEFROST)
                     || protectionOn(MAX_DEFROST) || protectionOn(AC_MAX);
             if (protecting && !protectedMode) protectionUntil = now + 3000;
@@ -317,6 +322,17 @@ public final class HvacCirculationHook implements IXposedHookLoadPackage {
             if (protectedMode || now < protectionUntil) {
                 // Accept necessary circulation transitions as the new baseline. Do not
                 // restore the old manual mode when defog/defrost/MAX AC subsequently exits.
+                if (request == null && now >= settleUntil && isManual(actual)
+                        && (actual != desired || correctionEpisode || awaitingManual)) {
+                    remember(actual, 0, false, false);
+                }
+                automationActive = false;
+                automationExitUntil = 0;
+                return;
+            }
+            if (!correctionEnabled) {
+                // Disabling stops an unfinished episode. Track current real circulation so
+                // enabling later does not restore a stale mode selected while the lock was off.
                 if (request == null && now >= settleUntil && isManual(actual)
                         && (actual != desired || correctionEpisode || awaitingManual)) {
                     remember(actual, 0, false, false);
@@ -389,6 +405,17 @@ public final class HvacCirculationHook implements IXposedHookLoadPackage {
 
     private boolean ready() {
         return manager != null && BatterySocHook.isCarReady(manager);
+    }
+
+    private boolean readCorrectionEnabled() {
+        try {
+            Bundle settings = context.getContentResolver().call(
+                    BootSettings.URI, BootSettings.READ, null, null);
+            return settings != null && settings.getBoolean(BootSettings.HVAC_CORRECTION, false);
+        } catch (Throwable error) {
+            report("Could not read circulation correction setting; treating it as off", error);
+            return false;
+        }
     }
 
     private boolean canWrite() {

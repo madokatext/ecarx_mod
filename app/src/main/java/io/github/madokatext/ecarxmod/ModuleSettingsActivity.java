@@ -72,6 +72,16 @@ public final class ModuleSettingsActivity extends Activity {
         }
         body.addView(presets, matchWidth());
 
+        body.addView(text(getString(R.string.hvac_settings_title), 26));
+        Switch hvacCorrection = new Switch(this);
+        hvacCorrection.setId(1004);
+        hvacCorrection.setText(R.string.hvac_correction_label);
+        hvacCorrection.setTextSize(22);
+        hvacCorrection.setMinimumHeight(dp(72));
+        hvacCorrection.setChecked(saved.getBoolean(BootSettings.HVAC_CORRECTION, false));
+        body.addView(hvacCorrection, matchWidth());
+        body.addView(text(getString(R.string.hvac_correction_hint), 18));
+
         Button save = new Button(this);
         save.setText(R.string.save_boot_settings);
         save.setTextSize(20);
@@ -83,6 +93,7 @@ public final class ModuleSettingsActivity extends Activity {
             boolean success = BootSettings.preferences(this).edit()
                     .putBoolean(BootSettings.ENABLED, enabled.isChecked())
                     .putBoolean(BootSettings.DISABLE_LOW_SPEED, disableLowSpeed.isChecked())
+                    .putBoolean(BootSettings.HVAC_CORRECTION, hvacCorrection.isChecked())
                     .putInt(BootSettings.DELAY, delay.getProgress() + BootSettings.MIN_DELAY).commit();
             Toast.makeText(this, success ? R.string.boot_settings_saved : R.string.boot_settings_save_failed,
                     Toast.LENGTH_LONG).show();
@@ -95,8 +106,10 @@ public final class ModuleSettingsActivity extends Activity {
         Switch enabled = findViewById(1001);
         SeekBar delay = findViewById(1002);
         Switch disableLowSpeed = findViewById(1003);
+        Switch hvacCorrection = findViewById(1004);
         state.putBoolean(BootSettings.ENABLED, enabled.isChecked());
         state.putBoolean(BootSettings.DISABLE_LOW_SPEED, disableLowSpeed.isChecked());
+        state.putBoolean(BootSettings.HVAC_CORRECTION, hvacCorrection.isChecked());
         state.putInt(BootSettings.DELAY, delay.getProgress() + BootSettings.MIN_DELAY);
         super.onSaveInstanceState(state);
     }

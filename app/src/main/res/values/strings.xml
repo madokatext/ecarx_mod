@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ECARX 保电修复</string>
-    <string name="module_description">独立配置开机 HEV、低速提示与保电恢复；支持文件控制及实际状态输出。空调内外循环保留手动选择，限制 AQS/G-clean 联动，每次自动变更最多纠正两次。</string>
+    <string name="module_description">独立配置开机 HEV、低速提示与保电恢复；支持文件控制及实际状态输出。可选的空调循环纠正默认关闭，启用后每次 AQS/G-clean 自动变更最多纠正两次。</string>
     <string name="boot_settings_title">开机恢复设置</string>
     <string name="boot_settings_intro">两个功能开关相互独立，共用一次启动延时。均启用且车辆条件满足时，按 HEV → 保电恢复 → 关闭低速提示的顺序执行。</string>
     <string name="force_hev_label">启动后切换 HEV</string>
@@ -10,9 +10,12 @@
     <string name="boot_delay_hint">5 秒至 5 分钟，从本次开机原车设置应用启动开始计时。关闭 HEV 选项仍可单独关闭低速提示；HEV 或保电等待、失败不会阻塞低速提示。</string>
     <string name="seconds_short">%1$d 秒</string>
     <string name="save_boot_settings">保存设置</string>
-    <string name="boot_settings_saved">已保存，下次车机重启生效</string>
+    <string name="boot_settings_saved">已保存。空调纠正开关约 1 秒内生效，开机设置下次车机重启生效。</string>
     <string name="boot_settings_save_failed">保存失败，请重新保存</string>
     <string name="boot_sync_hint">原车界面和状态文件依据车辆回读同步。手动或文件操作 HEV／保电只取消对应恢复，操作低速提示只取消其自动关闭，各自最多重试一次。</string>
+    <string name="hvac_settings_title">空调内外循环</string>
+    <string name="hvac_correction_label">纠正 AQS／G-clean 引起的内外循环变化</string>
+    <string name="hvac_correction_hint">默认关闭。开启后每次自动变更最多纠正两次，保留手动选择，并让出一键除雾、除霜及强力制冷的必要循环切换。保存后约 1 秒内生效；关闭不影响文件手动控制和实际状态输出。</string>
     <string-array name="xposed_scope">
         <item>ecarx.settings</item>
         <item>ecarx.hvac.app</item>
