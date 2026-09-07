@@ -34,6 +34,7 @@ final class BootStateRestorer {
     private final AtomicInteger requestRevision = new AtomicInteger();
     private final List<XC_MethodHook.Unhook> hooks = new ArrayList<>();
     private final Runnable attempt = this::restoreIfReady;
+    private final Runnable lowSpeedAttempt = this::runLowSpeedStage;
     private final BootLowSpeedAction lowSpeed = new BootLowSpeedAction();
     private final BootHevGate hevGate = new BootHevGate(this::wakeAfterConfiguration, lowSpeed);
     private Context context;
@@ -46,7 +47,7 @@ final class BootStateRestorer {
     private int readinessPolls;
     private long chargeConfirmAfter;
     private int lastSyncedMode = UNKNOWN;
-    private boolean chargeRestored;
+    private boolean lowSpeedReleased;
 
     void install(ClassLoader loader, Class<?> carClass) {
         hooks.add(XposedHelpers.findAndHookMethod("ecarx.settings.App", loader,
@@ -104,12 +105,13 @@ final class BootStateRestorer {
 
     private synchronized void wakeAfterConfiguration() {
         if (pending && !stopped) schedule(100);
+        scheduleLowSpeed(100);
     }
 
     void onExternalRequest(int function) {
         if (isRestoring()) return;
         if (function == VehicleControl.LOW_SPEED_WARNING.function) {
-            lowSpeed.cancel();
+            takeFileLowSpeedControl();
             return;
         }
         if (function != EPT_MODE && function != BatterySocHook.CHARGE_MODE
@@ -119,7 +121,7 @@ final class BootStateRestorer {
             pending = false;
             handler.removeCallbacks(attempt);
             hevGate.cancel();
-            lowSpeed.cancel();
+            releaseLowSpeed();
         }
     }
 
@@ -137,6 +139,7 @@ final class BootStateRestorer {
             fileModeOwned = false;
             handler.removeCallbacks(attempt);
             carManager = manager;
+            releaseLowSpeed();
             try {
                 saveMode(mode);
             } catch (Throwable error) {
@@ -156,11 +159,12 @@ final class BootStateRestorer {
         pending = false;
         handler.removeCallbacks(attempt);
         hevGate.cancel();
-        lowSpeed.cancel();
+        releaseLowSpeed();
     }
 
     void takeFileLowSpeedControl() {
         lowSpeed.cancel();
+        handler.removeCallbacks(lowSpeedAttempt);
     }
 
     synchronized void rememberFileMode(int actual) {
@@ -177,16 +181,18 @@ final class BootStateRestorer {
         // Do not hold a lock or write vehicle properties inside a Binder callback.
         handler.post(() -> {
             synchronized (BootStateRestorer.this) {
-                if (stopped || fileModeOwned || revision != requestRevision.get()) {
+                if (stopped) return;
+                carManager = manager;
+                // Manual/file HEV ownership cannot suppress the other boot feature.
+                scheduleLowSpeed(connected ? 100 : 1000);
+                if (fileModeOwned || revision != requestRevision.get()) {
                     return;
                 }
-                carManager = manager;
                 // Connection notifications must not reset a running sequence's request budget.
                 if (!pending) {
                     writes = 0;
                     targetWrites = 0;
                     chargeConfirmAfter = 0;
-                    chargeRestored = false;
                 }
                 pending = true;
                 readinessPolls = 0;
@@ -226,14 +232,12 @@ final class BootStateRestorer {
             }
             if (gate == BootHevGate.Result.STOP) {
                 pending = false;
+                releaseLowSpeed();
                 return;
             }
             if (gate == BootHevGate.Result.WAIT) {
+                if (hevGate.isWaitingForVehicle()) releaseLowSpeed();
                 schedule(hevGate.nextDelayMs());
-                return;
-            }
-            if (chargeRestored) {
-                runLowSpeedStage();
                 return;
             }
             long remaining = chargeConfirmAfter - SystemClock.elapsedRealtime();
@@ -261,6 +265,7 @@ final class BootStateRestorer {
             }
             if (!BatterySocHook.isChargeMode(desired)) {
                 pending = false;
+                releaseLowSpeed();
                 Log.w(TAG, "Skipped restart restore: saved mode is invalid");
                 return;
             }
@@ -270,6 +275,7 @@ final class BootStateRestorer {
                 int drive = read(DRIVE_MODE);
                 if (ept == EPT_EV || (drive != COMFORT && (drive & 0xffffff00) == DRIVE_MODE)) {
                     // Leave EV / other driving modes intact. Their next state event wakes us.
+                    releaseLowSpeed();
                     return;
                 }
                 if ((ept != EPT_HEV && ept != EPT_SAVE) || drive != COMFORT) {
@@ -282,6 +288,7 @@ final class BootStateRestorer {
             int target = desired == BatterySocHook.MODE_HOLD ? 0 : BatterySocHook.readTarget(context);
             if (actual != desired && writes >= MAX_WRITES) {
                 pending = false;
+                releaseLowSpeed();
                 Log.w(TAG, "Stopped restart restore: mode not confirmed after " + writes + " requests");
                 return;
             }
@@ -306,15 +313,15 @@ final class BootStateRestorer {
             }
 
             if (actual == desired) {
-                chargeRestored = true;
+                pending = false;
                 Log.i(TAG, "Restart mode readback matched: 0x" + Integer.toHexString(desired));
-                // Continue on the next main-loop pass; do not apply the startup delay twice.
-                schedule(100);
+                releaseLowSpeed();
             } else {
                 schedule(1000);
             }
         } catch (Throwable error) {
             BatterySocHook.logFailure("Restart restore could not complete", error);
+            releaseLowSpeed();
             if (++readinessPolls < MAX_READINESS_POLLS) {
                 schedule(1000);
             }
@@ -331,19 +338,48 @@ final class BootStateRestorer {
         }
     }
 
-    private void runLowSpeedStage() {
-        boolean finished;
-        restoring.set(true);
+    private synchronized void runLowSpeedStage() {
+        if (stopped || context == null || carManager == null) return;
         try {
-            finished = lowSpeed.step(carManager);
-        } finally {
-            restoring.remove();
+            BootHevGate.Result delay = hevGate.sharedDelayStatus();
+            if (delay == BootHevGate.Result.STOP) return;
+            if (delay == BootHevGate.Result.WAIT) {
+                scheduleLowSpeed(hevGate.sharedDelayRemainingMs());
+                return;
+            }
+            if (!lowSpeed.isPending()) return;
+            // Preserve normal ordering when both options are enabled. Waiting/failed charge
+            // restoration releases this action rather than making success a prerequisite.
+            if (hevGate.isHevEnabled() && pending && !lowSpeedReleased) {
+                if (BatterySocHook.isCarReady(carManager)) {
+                    scheduleLowSpeed(500);
+                    return;
+                }
+                // A disconnect can pause the HEV timer; keep this action independently bounded.
+                lowSpeedReleased = true;
+            }
+            boolean finished;
+            restoring.set(true);
+            try {
+                finished = lowSpeed.step(carManager);
+            } finally {
+                restoring.remove();
+            }
+            if (!finished) scheduleLowSpeed(lowSpeed.nextDelayMs());
+        } catch (Throwable error) {
+            BatterySocHook.logFailure("Independent low-speed boot action could not complete", error);
         }
-        if (finished) {
-            pending = false;
-        } else {
-            schedule(lowSpeed.nextDelayMs());
-        }
+    }
+
+    private void releaseLowSpeed() {
+        lowSpeedReleased = true;
+        scheduleLowSpeed(100);
+    }
+
+    private void scheduleLowSpeed(long delayMs) {
+        if (stopped) return;
+        handler.removeCallbacks(lowSpeedAttempt);
+        handler.postDelayed(lowSpeedAttempt, delayMs);
     }
 
     private void syncActualMode(int actual) {
@@ -368,6 +404,7 @@ final class BootStateRestorer {
     }
 
     private void waitForReady() {
+        releaseLowSpeed();
         if (++readinessPolls < MAX_READINESS_POLLS) {
             schedule(1000);
         }

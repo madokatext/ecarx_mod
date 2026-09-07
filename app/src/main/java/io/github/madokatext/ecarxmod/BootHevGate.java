@@ -44,8 +44,10 @@ final class BootHevGate {
     private SharedPreferences state;
     private volatile boolean stopped;
     private boolean configured;
+    private boolean settingsAvailable;
     private boolean cancelled;
     private boolean enabled;
+    private boolean waitingForVehicle;
     private String status = WAITING;
     private long startedAt;
     private long dueAt;
@@ -135,6 +137,7 @@ final class BootHevGate {
                 status = CANCELLED;
                 commit(state.edit().putString(STATUS, status));
             }
+            settingsAvailable = true;
             configured = true;
             Log.i(TAG, "Boot HEV enabled=" + enabled + ", status=" + status
                     + ", remaining delay=" + Math.max(0, dueAt - SystemClock.elapsedRealtime()) + " ms");
@@ -149,6 +152,7 @@ final class BootHevGate {
     // be mistaken for manual edits. All state below is confined to the host's main looper.
     Result step(Object manager) {
         waitMs = 1000;
+        waitingForVehicle = false;
         if (stopped) return Result.STOP;
         if (cancelled) return Result.READY;
         if (!configured) return Result.WAIT;
@@ -201,6 +205,7 @@ final class BootHevGate {
     }
 
     private Result waitForVehicle(long now) {
+        waitingForVehicle = true;
         if (now >= dueAt + 60000) return fail("vehicle readiness timed out", null);
         return Result.WAIT;
     }
@@ -249,6 +254,22 @@ final class BootHevGate {
     }
 
     long nextDelayMs() { return Math.max(100, waitMs); }
+
+    // The shared timer/configuration is independent of HEV success or cancellation.
+    Result sharedDelayStatus() {
+        if (stopped) return Result.STOP;
+        if (!configured) return Result.WAIT;
+        if (!settingsAvailable) return Result.STOP;
+        return SystemClock.elapsedRealtime() < dueAt ? Result.WAIT : Result.READY;
+    }
+
+    long sharedDelayRemainingMs() {
+        return configured ? Math.max(100, dueAt - SystemClock.elapsedRealtime()) : 500;
+    }
+
+    boolean isHevEnabled() { return enabled; }
+
+    boolean isWaitingForVehicle() { return waitingForVehicle; }
 
     private static void commit(SharedPreferences.Editor editor) {
         if (!editor.commit()) throw new IllegalStateException("Boot state was not saved");

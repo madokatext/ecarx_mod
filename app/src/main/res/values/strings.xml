@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ECARX 保电修复</string>
-    <string name="module_description">共享开机延时，依次切换 HEV、恢复保电、可选关闭低速提示，并同步原车界面；支持文件控制及实际状态输出。</string>
+    <string name="module_description">独立配置启动后切换 HEV 与关闭低速提示，共享延时，恢复保电并同步原车界面；支持文件控制及实际状态输出。</string>
     <string name="boot_settings_title">开机恢复设置</string>
-    <string name="boot_settings_intro">共用一次开机延时，按顺序执行：切换 HEV（可选）→ 恢复保电并补发目标 → 关闭低速行驶提示（可选）。</string>
-    <string name="force_hev_label">每次开机先切换 HEV</string>
-    <string name="disable_low_speed_label">保电恢复后关闭低速行驶提示</string>
+    <string name="boot_settings_intro">两个功能开关相互独立，共用一次启动延时。均启用且车辆条件满足时，按 HEV → 保电恢复 → 关闭低速提示的顺序执行。</string>
+    <string name="force_hev_label">启动后切换 HEV</string>
+    <string name="disable_low_speed_label">启动后关闭低速行驶提示</string>
     <string name="boot_delay_label">开机执行延时：%1$d 秒</string>
-    <string name="boot_delay_hint">5 秒至 5 分钟，从本次开机原车设置应用启动开始计时。整个流程共用该延时，关闭低速提示前不再额外延时。关闭 HEV 选项时，按原驾驶模式恢复保电。</string>
+    <string name="boot_delay_hint">5 秒至 5 分钟，从本次开机原车设置应用启动开始计时。关闭 HEV 选项仍可单独关闭低速提示；HEV 或保电等待、失败不会阻塞低速提示。</string>
     <string name="seconds_short">%1$d 秒</string>
     <string name="save_boot_settings">保存设置</string>
     <string name="boot_settings_saved">已保存，下次车机重启生效</string>
     <string name="boot_settings_save_failed">保存失败，请重新保存</string>
-    <string name="boot_sync_hint">原车界面和状态文件依据车辆回读同步。HEV 或保电恢复未完成时，不执行后续步骤。手动或文件控制优先；操作低速提示会取消本次开机的自动关闭。</string>
+    <string name="boot_sync_hint">原车界面和状态文件依据车辆回读同步。手动或文件操作 HEV／保电只取消对应恢复，操作低速提示只取消其自动关闭，各自最多重试一次。</string>
     <string-array name="xposed_scope">
         <item>ecarx.settings</item>
     </string-array>

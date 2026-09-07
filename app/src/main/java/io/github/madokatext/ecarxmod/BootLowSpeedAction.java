@@ -9,7 +9,7 @@ import android.util.Log;
 
 import de.robv.android.xposed.XposedHelpers;
 
-/** Final boot stage, entered only after charge mode confirmation and target replay. */
+/** Independent low-speed boot action using the shared delay and its own request budget. */
 final class BootLowSpeedAction {
     private static final String TAG = "EcarxSocFix";
     private static final String ENABLED = "low_speed_boot_enabled";
@@ -38,6 +38,11 @@ final class BootLowSpeedAction {
                 .putInt(WRITES, 0).putLong(STARTED, 0).putLong(LAST_WRITE, 0);
     }
 
+    boolean isPending() {
+        return !stopped && !cancelled && state != null && state.getBoolean(ENABLED, false)
+                && WAITING.equals(state.getString(STATUS, "disabled"));
+    }
+
     // Returns true when finished/skipped. The caller supplies its own-write scope.
     boolean step(Object manager) {
         if (stopped || cancelled) return true;
@@ -46,8 +51,7 @@ final class BootLowSpeedAction {
         waitMs = 1000;
         try {
             // Missing state on an in-place upgrade is skipped until the next OS boot.
-            if (state == null || !state.getBoolean(ENABLED, false)
-                    || !WAITING.equals(state.getString(STATUS, "disabled"))) return true;
+            if (!isPending()) return true;
             long persistedStart = state.getLong(STARTED, 0);
             if (persistedStart == 0) {
                 commit(state.edit().putLong(STARTED, firstStepAt));
