@@ -1,8 +1,10 @@
 # ECARX 保电修复
 
-用于 Android 9 车机、LSPosed API 93 的模块，作用域为 `ecarx.settings`。当前版本 **1.3.0**：新增模块设置界面，可配置每次开机先切换 HEV，再恢复保电，以及 **5–300 秒**的开机执行延时。通过车辆回读同步原车设置界面。保留文件控制、读取有效指令后立即清空、三个实际状态文件及保电目标补发功能。
+用于 Android 9 车机、LSPosed API 93 的模块，作用域为 `ecarx.settings`。当前版本 **1.3.1**：修复设置页使用 Android 10 API 导致的启动闪退，并将编译 SDK 限定为 Android 9／API 28。保留可配置的开机 HEV 切换、**5–300 秒**延时、保电恢复与目标补发、文件控制及实际状态同步功能。
 
 适配依据是 XCSettings2 **3.0.0.0064（versionCode 3000064）** 的类名、方法和功能 ID。按需求未执行单元测试、设备测试或实车验证；GitHub Actions 只编译和打包 APK。
+
+1.3.0 设置页曾调用 `SeekBar` 继承的 `ProgressBar.setMinHeight(int)`，该方法从 API 29 才提供，在 Android 9 会触发 `NoSuchMethodError`。1.3.1 改用从 API 1 就支持的 `View.setMinimumHeight(int)`，并用 API 28 的 Android 框架声明编译，阻止直接引用更新版本的框架 API。[ProgressBar 官方文档](https://developer.android.com/reference/android/widget/ProgressBar#setMinHeight(int))、[View 官方文档](https://developer.android.com/reference/android/view/View#setMinimumHeight(int))。
 
 ## 安装
 
@@ -154,8 +156,8 @@ NegativeOneScreenWidgetManager.changeFunctionValue(Context, NegativeOneScreenWid
 - JDK 17
 - Gradle 8.9
 - Android Gradle Plugin 8.7.3
-- Android SDK 35、Build Tools 34.0.0
-- `minSdk=28`、`targetSdk=28`，面向 Android 9
+- Android SDK 28、Build Tools 34.0.0（Build Tools 是编译工具版本，不是车机运行时 API）
+- `compileSdk=28`、`minSdk=28`、`targetSdk=28`，以 Android 9 的框架 API 编译
 - 传统 Xposed Java API `de.robv.android.xposed:api:82`，仅使用 `compileOnly`，由 LSPosed API 93 在运行时提供实现
 - Manifest 中 `xposedminversion=93`，入口为 `assets/xposed_init`
 

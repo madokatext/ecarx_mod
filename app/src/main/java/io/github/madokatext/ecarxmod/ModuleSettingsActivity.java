@@ -39,7 +39,8 @@ public final class ModuleSettingsActivity extends Activity {
         SeekBar delay = new SeekBar(this);
         delay.setId(1002);
         delay.setMax(BootSettings.MAX_DELAY - BootSettings.MIN_DELAY);
-        delay.setMinHeight(dp(64));
+        // ProgressBar.setMinHeight is API 29; use the View method available on Android 9.
+        delay.setMinimumHeight(dp(64));
         delay.setProgress(BootSettings.clampDelay(saved.getInt(BootSettings.DELAY)) - BootSettings.MIN_DELAY);
         Runnable showDelay = () -> delayLabel.setText(getString(R.string.boot_delay_label,
                 delay.getProgress() + BootSettings.MIN_DELAY));
