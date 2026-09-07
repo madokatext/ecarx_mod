@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ECARX 保电修复</string>
-    <string name="module_description">独立配置启动后切换 HEV 与关闭低速提示，共享延时，恢复保电并同步原车界面；支持文件控制及实际状态输出。</string>
+    <string name="module_description">独立配置开机 HEV、低速提示与保电恢复；支持文件控制及实际状态输出。空调内外循环保留手动选择，限制 AQS/G-clean 联动，每次自动变更最多纠正两次。</string>
     <string name="boot_settings_title">开机恢复设置</string>
     <string name="boot_settings_intro">两个功能开关相互独立，共用一次启动延时。均启用且车辆条件满足时，按 HEV → 保电恢复 → 关闭低速提示的顺序执行。</string>
     <string name="force_hev_label">启动后切换 HEV</string>
@@ -15,5 +15,6 @@
     <string name="boot_sync_hint">原车界面和状态文件依据车辆回读同步。手动或文件操作 HEV／保电只取消对应恢复，操作低速提示只取消其自动关闭，各自最多重试一次。</string>
     <string-array name="xposed_scope">
         <item>ecarx.settings</item>
+        <item>ecarx.hvac.app</item>
     </string-array>
 </resources>

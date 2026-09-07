@@ -43,9 +43,9 @@ final class ControlFileMonitor {
     private volatile boolean stopped;
     private long lastError;
 
-    ControlFileMonitor(Listener listener) {
+    ControlFileMonitor(Listener listener, VehicleControl... controls) {
         this.listener = listener;
-        for (VehicleControl control : VehicleControl.values()) entries.put(control, new Entry());
+        for (VehicleControl control : controls) entries.put(control, new Entry());
     }
 
     void start() {
@@ -132,6 +132,7 @@ final class ControlFileMonitor {
             try {
                 Files.createDirectories(directory);
                 for (Map.Entry<VehicleControl, String> item : values.entrySet()) {
+                    if (!entries.containsKey(item.getKey())) continue;
                     Path destination = directory.resolve(item.getKey().name + "_state.txt");
                     byte[] bytes = item.getValue().getBytes(StandardCharsets.US_ASCII);
                     // Repair removed/externally modified state files without changing controls.

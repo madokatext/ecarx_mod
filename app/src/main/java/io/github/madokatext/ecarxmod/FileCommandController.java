@@ -26,7 +26,7 @@ final class FileCommandController {
     private final EnumMap<VehicleControl, Integer> lastActual = new EnumMap<>(VehicleControl.class);
     private final List<XC_MethodHook.Unhook> hooks = new ArrayList<>();
     private final BootStateRestorer restart;
-    private final ControlFileMonitor files = new ControlFileMonitor(this::onEdit);
+    private final ControlFileMonitor files = new ControlFileMonitor(this::onEdit, VehicleControl.SETTINGS);
     private Context context;
     private Object manager;
     private volatile boolean stopped;
@@ -64,7 +64,7 @@ final class FileCommandController {
 
     void onHostRequest(int function) {
         if (isDispatching() || restart.isRestoring()) return;
-        for (VehicleControl control : VehicleControl.values()) {
+        for (VehicleControl control : VehicleControl.SETTINGS) {
             if (control.function == function || (control == VehicleControl.SMART_CHARGE
                     && function == BatterySocHook.TARGET_SOC)) {
                 hostRevisions.incrementAndGet(control.ordinal());
@@ -207,10 +207,10 @@ final class FileCommandController {
     private void pollStates() {
         if (stopped) return;
         EnumMap<VehicleControl, String> states = new EnumMap<>(VehicleControl.class);
-        for (VehicleControl control : VehicleControl.values()) states.put(control, "");
+        for (VehicleControl control : VehicleControl.SETTINGS) states.put(control, "");
         try {
             if (BatterySocHook.isCarReady(manager)) {
-                for (VehicleControl control : VehicleControl.values()) {
+                for (VehicleControl control : VehicleControl.SETTINGS) {
                     try {
                         int actual = read(control.function);
                         states.put(control, control.stateValue(actual));

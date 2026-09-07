@@ -186,7 +186,7 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
 
     static void dispatchActual(Object manager, int function, int actual) {
         // Never synthesize UI state from a requested value. Callers supply vehicle readback.
-        for (VehicleControl control : VehicleControl.values()) {
+        for (VehicleControl control : VehicleControl.SETTINGS) {
             if (control.function == function && !control.stateValue(actual).isEmpty()) {
                 Object watcher = XposedHelpers.getObjectField(manager, "mWatcher");
                 XposedHelpers.callMethod(watcher, "onFunctionValueChanged",

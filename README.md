@@ -1,8 +1,8 @@
 # ECARX 保电修复
 
-用于 Android 9 车机、LSPosed API 93 的模块，作用域为 `ecarx.settings`。当前版本 **1.4.1**：将“启动后切换 HEV”和“启动后关闭低速行驶提示”改为独立开关、独立执行任务，继续共用 **5–300 秒**启动延时。HEV／保电等待、失败或被取消，不再阻塞或取消低速提示任务。保留 API 28 编译限制、设置页兼容性修复、保电目标补发、文件控制及实际状态同步功能。
+用于 Android 9 车机、LSPosed API 93 的模块，作用域为 `ecarx.settings` 和 `ecarx.hvac.app`。当前版本 **1.5.0**：新增空调内外循环文件控制，以及 AQS／G-clean 联动后的循环纠正。原车按钮和文件操作可以改变循环目标；每次检测到自动变更，最多纠正 **2 次**，恢复后发生新的自动变更再开始新一轮。保留 1.4.1 的独立 HEV／低速提示开关、共享 **5–300 秒**启动延时、保电恢复及原有文件接口。
 
-适配依据是 XCSettings2 **3.0.0.0064（versionCode 3000064）** 的类名、方法和功能 ID。按需求未执行单元测试、设备测试或实车验证；GitHub Actions 只编译和打包 APK。
+适配依据是 XCSettings2 **3.0.0.0064（versionCode 3000064）** 和 XCHvac **2.3.0.026（versionCode 230026）** 的本地 APK／VDEX 中的类名、方法和功能 ID。按需求未执行单元测试、设备测试或实车验证；GitHub Actions 只编译和打包 APK。
 
 1.3.0 设置页曾调用 `SeekBar` 继承的 `ProgressBar.setMinHeight(int)`，该方法从 API 29 才提供，在 Android 9 会触发 `NoSuchMethodError`。1.3.1 改用从 API 1 就支持的 `View.setMinimumHeight(int)`，并用 API 28 的 Android 框架声明编译，阻止直接引用更新版本的框架 API。[ProgressBar 官方文档](https://developer.android.com/reference/android/widget/ProgressBar#setMinHeight(int))、[View 官方文档](https://developer.android.com/reference/android/view/View#setMinimumHeight(int))。
 
@@ -10,7 +10,7 @@
 
 1. 打开本仓库 [Actions](https://github.com/madokatext/ecarx_mod/actions/workflows/build-apk.yml)，选择成功的 **Build APK** 运行。
 2. 下载运行页面下方的 `ecarx-mod-apk-...` artifact，解压后安装 APK。
-3. 在 LSPosed 中启用 **ECARX 保电修复**，勾选 **ecarx.settings**。模块已声明这个推荐作用域，无需勾选系统框架或桌面应用。
+3. 在 LSPosed 中启用 **ECARX 保电修复**，勾选 **ecarx.settings** 和 **ecarx.hvac.app**。升级安装后也需要确认新增的空调作用域已勾选。模块已声明这两个推荐作用域，无需勾选系统框架或桌面应用。
 4. 打开桌面的 **ECARX 保电修复**，或从 LSPosed 的模块设置入口打开设置页，独立选择“启动后切换 HEV”“启动后关闭低速行驶提示”，设置共享启动延时，点击 **保存设置**。
 5. 重启车机，使目标进程重新加载模块。设置保存后从下一次车机重启生效；两个功能开关默认开启，共享的开机延时默认 5 秒。
 6. 保电目标继续在原车“动力电池”页面设置。负一屏和设置页的保电模式切换都会被记忆；重启后按配置执行 HEV 与保电恢复。
@@ -64,13 +64,14 @@ Actions 默认生成 **debug 签名、可安装的 APK**，不需要配置仓库
 
 ## 文件控制与状态
 
-模块随 `ecarx.settings` 启动，在车机 **`/sdcard/ecarx_mod/`** 下创建六个 `.txt` 文件，不需要打开设置页面。文件操作使用原车设置应用的身份；适配的原应用已声明外部存储写权限。存储尚不可用时会等待并重试访问。
+模块在车机 **`/sdcard/ecarx_mod/`** 下提供八个 `.txt` 文件。原有六个由 `ecarx.settings` 进程处理；新增两个空调文件由 `ecarx.hvac.app.MyApplication.onCreate()` 启动监控，不需要打开空调页面。两个进程各自只读写所属功能的文件，避免重复消费或互相覆盖状态。文件操作使用对应宿主的身份；适配的 XCHvac 使用 `android.uid.system` 共享 UID，实际存储访问权限以车机为准。存储尚不可用或权限不足时记录日志并重试访问。
 
 | 控制文件：用户写入 | 实际状态文件：模块更新 | `0` | `1` |
 | --- | --- | --- | --- |
 | `ev_hev.txt` | `ev_hev_state.txt` | EV | HEV |
 | `smart_charge.txt` | `smart_charge_state.txt` | 智能保电关闭 | 智能保电开启 |
 | `low_speed_warning.txt` | `low_speed_warning_state.txt` | 低速行驶提示关闭 | 低速行驶提示开启 |
+| `hvac_circulation.txt` | `hvac_circulation_state.txt` | 外循环 | 内循环 |
 
 ### 控制文件
 
@@ -87,11 +88,12 @@ Actions 默认生成 **debug 签名、可安装的 APK**，不需要配置仓库
 echo 1 > /sdcard/ecarx_mod/ev_hev.txt
 echo 1 > /sdcard/ecarx_mod/smart_charge.txt
 echo 0 > /sdcard/ecarx_mod/low_speed_warning.txt
+echo 1 > /sdcard/ecarx_mod/hvac_circulation.txt
 ```
 
-上述内容分别请求 HEV、开启智能保电、关闭低速行驶提示。也可以直接用文本编辑器修改对应文件并保存。
+上述内容分别请求 HEV、开启智能保电、关闭低速行驶提示、切换内循环。向 `hvac_circulation.txt` 写入 `0` 则请求外循环。也可以直接用文本编辑器修改对应文件并保存。
 
-### 下发、确认与重试
+### 设置应用功能的下发、确认与重试
 
 - EV/HEV 使用 `0x22040d00`，写入 EV `0x22040d02` 或 HEV `0x22040d01`。低速提示使用开关属性 **`0x201a0100`**，不改动提示音等级。
 - 开启或关闭智能保电时，均读取原应用 `share_car_setting / TARGET_BATTERY_KEY`，随模式指令补发当前保存的目标电量，仍限制在 30–85%。
@@ -103,12 +105,48 @@ echo 0 > /sdcard/ecarx_mod/low_speed_warning.txt
 
 ### 实际状态文件
 
-- 每 **1 秒**主动读取三个车辆属性；车辆状态发生变化时更新对应文件，因此原设置页、负一屏等来源的操作也会反映出来。只在内容需要变化、文件丢失或被外部修改时写入。
+- 两个宿主分别每 **1 秒**主动读取所属车辆属性；车辆状态发生变化时更新对应文件，因此原设置页、负一屏、空调页面等来源的操作也会反映出来。只在内容需要变化、文件丢失或被外部修改时写入。
 - 有效状态为单字节 `0` 或 `1`，无 BOM、无换行，GBK 与 UTF-8 均可读取。未知值、读取失败或车辆服务断开时写为空，避免继续展示过期状态。
 - 智能保电处于 **HOLD／电量保持** 模式时，`smart_charge_state.txt` 为 `0`，与原设置页“智能保电”开关关闭一致；此文件不表示 HOLD 开关状态。
 - EV/HEV 返回 **SAVE** 等不能映射为 EV 或 HEV 的模式时，`ev_hev_state.txt` 留空，不冒充 HEV。
 - 状态文件只展示车辆接口实际回读，不用于下发指令。手动修改它们不会控制车辆，下一轮同步会恢复回读值。
-- 同步依赖 `ecarx.settings` 进程运行；进程退出或车机断电后，磁盘上可能保留最后一次内容，下次进程启动后重新读取更新。文件不是车辆控制器的独立实时接口。
+- 同步依赖对应的 `ecarx.settings`／`ecarx.hvac.app` 进程运行；进程退出或车机断电后，磁盘上可能保留最后一次内容，下次进程启动后重新读取更新。文件不是车辆控制器的独立实时接口。
+
+## 空调内外循环与 AQS／G-clean
+
+“锁定”指 AQS／G-clean 自动改变循环后，纠正到手动目标；**原车内外循环按钮仍可使用，AQS 和 G-clean 开关仍按原程序工作**。模块不伪造循环状态，也不把两个净化功能整体关闭。
+
+### 文件操作
+
+- 控制文件为 `/sdcard/ecarx_mod/hvac_circulation.txt`，`0`＝外循环，`1`＝内循环；实际回读写入 `/sdcard/ecarx_mod/hvac_circulation_state.txt`。AUTO、OFF、未知值或车辆服务断开不能映射为内／外循环时，状态文件为空。
+- 完整复用已有 `ControlFileMonitor`：500 ms 轮询、UTF-8／UTF-8 BOM／GBK、有效指令先清空、启动旧内容只作为基线、不因重连重放、删除或新编辑取消旧指令。
+- 每条文件指令最多下发 **2 次（首次加一次重试）**，每次下发后至少等 1 秒回读确认。等待车辆服务、空调电源开启和循环功能 `active` 最多 15 秒；超时结束，需要重新写文件。原车包装方法始终返回 `false`，因此只以实际回读确认。
+- 文件指令处理期间暂停自动纠正。失败或取消后不会再用自动纠正补发同一条未成功的文件命令；只有实际模式后来匹配目标，或新的手动／文件操作，才解除这项等待。原车按钮操作会立即取消旧文件指令及剩余重试。
+
+### 每次自动变更最多纠正两次
+
+1. 原车按钮通过 `AirConditionPresenter.setCycleStyle(int)` → `CarFuncManager.setFunctionValue(...)` 下发。模块识别该宿主中的循环请求，以及独立的文件请求，更新手动目标；模块自己的纠正请求不会被误识别为新的手动操作。
+2. 首次运行没有历史时，以首次有效车辆回读作为初始循环目标，不猜测用户希望内循环还是外循环。AQS／G-clean 启用前也会捕获循环基线。手动请求尚未回读成功时，不将其失败视为自动变更。
+3. AQS 或 G-clean 实际回读开启时，检测到循环偏离目标且没有待确认的手动／文件操作，就开始一次自动纠正。车辆回调会唤醒同步，另有每秒回读兜底。两个功能关闭后保留 3 秒观察窗口，覆盖退出时的延迟循环变化。
+4. 一次自动变更最多发送 **2 次纠正**，两次至少间隔 1 秒。收到目标模式的实际回读即结束该次处理；之后再次检测到新的自动变更，重新从第 1 次纠正开始计数。**同一个持续未恢复的偏差不会因重复回调、轮询、断线重连或进程重启重置次数。** 达到两次仍未恢复就停止该次纠正，继续输出真实状态。
+5. 目标模式、当前纠正是否未完成、已发送次数和手动回读等待状态保存在空调宿主 `ecarx_circulation_lock` SharedPreferences 中。每次纠正先同步保存次数，再下发；写入失败时暂停自动纠正。
+
+原应用只把循环、AQS 和 G-clean 作为独立车辆属性传给车端，回调没有“变更来源”字段。因此这里依据**已识别的手动／文件请求、AQS／G-clean 状态及循环回读**判断自动变化，并通过回读后补发纠正；不能阻止车端先切换再回调，也不承诺界面完全没有短暂变化。最多两次纠正也不代表车端一定接受。其他进程直接下发的循环请求无法在本宿主内识别为手动操作，建议使用本文件接口或原空调按钮。
+
+**一键除雾／前风挡除霜、最大前风挡除霜、强力制冷 MAX AC 的必要循环切换不参与纠正。** 模块在这些模式的请求发出前即让出控制，并通过车辆状态回调和每秒回读兜底；模式工作期间及退出后 3 秒过渡期间暂停自动纠正，采纳其有效循环状态为新基线，避免退出后再拉回旧的内／外循环选择。新的组合模式操作会取消旧文件请求的剩余重试；在模式已生效后新写入的文件仍表示用户明确选择。这里只处理对应宿主／SDK 可识别的模式状态，车端不报告状态的额外联动不能凭来源标签区分。
+
+自动纠正还要求空调电源开启、循环功能可用。AQS／G-clean 未工作且退出观察结束时，沿用车辆有效状态作为基线，不持续控制其他空调功能。
+
+| 属性 | 功能 ID | 使用值 |
+| --- | --- | --- |
+| 内外循环 | `0x10030100` / `268632320` | 内 `0x10030101`，外 `0x10030102` |
+| AQS 开关 | `0x10080200` / `268960256` | 只读取 `0`／`1`，保留原车操作 |
+| G-clean 开关 | `0x10100400` / `269485056` | 只读取 `0`／`1`，保留原车操作 |
+| 前风挡除雾／除霜 | `0x10040100` / `268697856` | 开启和退出过渡期间让出循环控制 |
+| 最大前风挡除霜 | `0x10040200` / `268698112` | 同上，仅在车辆支持时读取 |
+| MAX AC 强力制冷 | `0x10010400` / `268502016` | 开启和退出过渡期间让出循环控制 |
+
+空调日志：`adb logcat -s EcarxHvacLock:I`。`AQS/G-clean circulation correction 1/2`／`2/2` 表示已尝试下发，实际结果看循环状态文件和车辆回读。
 
 ## 修复逻辑
 
@@ -173,7 +211,7 @@ NegativeOneScreenWidgetManager.changeFunctionValue(Context, NegativeOneScreenWid
 - Android SDK 28、Build Tools 34.0.0（Build Tools 是编译工具版本，不是车机运行时 API）
 - `compileSdk=28`、`minSdk=28`、`targetSdk=28`，以 Android 9 的框架 API 编译
 - 传统 Xposed Java API `de.robv.android.xposed:api:82`，仅使用 `compileOnly`，由 LSPosed API 93 在运行时提供实现
-- Manifest 中 `xposedminversion=93`，入口为 `assets/xposed_init`
+- Manifest 中 `xposedminversion=93`，`assets/xposed_init` 分别声明设置和空调两个独立入口
 
 “API 82”是编译使用的传统 Java 接口依赖版本，不要求把车机 LSPosed 降级，也不使用 modern libxposed API 100/101。
 
