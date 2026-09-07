@@ -87,7 +87,9 @@ final class FileCommandController {
             if (previous != null) finish(previous, "control file changed");
             if (value == null || revision != hostRevisions.get(control.ordinal())
                     || !files.isCurrent(control, snapshot)) return;
-            if (control == VehicleControl.SMART_CHARGE) restart.takeFileModeControl();
+            if (control == VehicleControl.SMART_CHARGE || control == VehicleControl.EV_HEV) {
+                restart.takeFileModeControl();
+            }
             Request request = new Request(control, snapshot,
                     value == 1 ? control.on : control.off, revision);
             requests.put(control, request);
@@ -237,9 +239,7 @@ final class FileCommandController {
         try {
             // Stock settings keep these switch states in callback-updated members, not extra
             // preferences. Use their real dispatcher for settings, Kanzi and widget observers.
-            Object watcher = XposedHelpers.getObjectField(manager, "mWatcher");
-            XposedHelpers.callMethod(watcher, "onFunctionValueChanged",
-                    new Class<?>[]{int.class, int.class, int.class}, control.function, 0, actual);
+            BatterySocHook.dispatchActual(manager, control.function, actual);
             lastActual.put(control, actual);
         } catch (Throwable error) {
             reportReadError(error); // A UI notification failure must not cause vehicle rewrites.

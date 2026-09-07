@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.util.ArrayList;
@@ -33,6 +34,7 @@ final class BootStateRestorer {
     private final AtomicInteger requestRevision = new AtomicInteger();
     private final List<XC_MethodHook.Unhook> hooks = new ArrayList<>();
     private final Runnable attempt = this::restoreIfReady;
+    private final BootHevGate hevGate = new BootHevGate(this::wakeAfterConfiguration);
     private Context context;
     private Object carManager;
     private boolean pending;
@@ -41,6 +43,8 @@ final class BootStateRestorer {
     private int writes;
     private int targetWrites;
     private int readinessPolls;
+    private long chargeConfirmAfter;
+    private int lastSyncedMode = UNKNOWN;
 
     void install(ClassLoader loader, Class<?> carClass) {
         hooks.add(XposedHelpers.findAndHookMethod("ecarx.settings.App", loader,
@@ -92,6 +96,22 @@ final class BootStateRestorer {
     private synchronized void attach(Context host) {
         Context application = host.getApplicationContext();
         context = application != null ? application : host;
+        hevGate.attach(context);
+    }
+
+    private synchronized void wakeAfterConfiguration() {
+        if (pending && !stopped) schedule(100);
+    }
+
+    void onExternalRequest(int function) {
+        if (isRestoring() || (function != EPT_MODE && function != BatterySocHook.CHARGE_MODE
+                && function != BatterySocHook.TARGET_SOC)) return;
+        requestRevision.incrementAndGet();
+        synchronized (this) {
+            pending = false;
+            handler.removeCallbacks(attempt);
+            hevGate.cancel();
+        }
     }
 
     void onModeRequested(Object manager, int mode) {
@@ -126,6 +146,7 @@ final class BootStateRestorer {
         fileModeOwned = true;
         pending = false;
         handler.removeCallbacks(attempt);
+        hevGate.cancel();
     }
 
     synchronized void rememberFileMode(int actual) {
@@ -146,9 +167,13 @@ final class BootStateRestorer {
                     return;
                 }
                 carManager = manager;
+                // Connection notifications must not reset a running sequence's request budget.
+                if (!pending) {
+                    writes = 0;
+                    targetWrites = 0;
+                    chargeConfirmAfter = 0;
+                }
                 pending = true;
-                writes = 0;
-                targetWrites = 0;
                 readinessPolls = 0;
                 handler.removeCallbacks(attempt);
                 if (connected) {
@@ -177,6 +202,26 @@ final class BootStateRestorer {
             return;
         }
         try {
+            BootHevGate.Result gate;
+            restoring.set(true);
+            try {
+                gate = hevGate.step(carManager);
+            } finally {
+                restoring.remove();
+            }
+            if (gate == BootHevGate.Result.STOP) {
+                pending = false;
+                return;
+            }
+            if (gate == BootHevGate.Result.WAIT) {
+                schedule(hevGate.nextDelayMs());
+                return;
+            }
+            long remaining = chargeConfirmAfter - SystemClock.elapsedRealtime();
+            if (remaining > 0) {
+                schedule(remaining);
+                return;
+            }
             if (!BatterySocHook.isCarReady(carManager)) {
                 waitForReady();
                 return;
@@ -188,6 +233,7 @@ final class BootStateRestorer {
                 waitForReady();
                 return;
             }
+            syncActualMode(actual);
             int desired = state.getInt(LAST_MODE, UNKNOWN);
             if (!state.contains(LAST_MODE)) {
                 // First installation has no history: adopt a valid vehicle state, never guess ON.
@@ -225,6 +271,7 @@ final class BootStateRestorer {
             try {
                 if (actual != desired) {
                     writes++;
+                    chargeConfirmAfter = SystemClock.elapsedRealtime() + 1000;
                     write(BatterySocHook.CHARGE_MODE, desired);
                 }
                 if (desired != BatterySocHook.MODE_HOLD && targetWrites < MAX_WRITES) {
@@ -263,6 +310,17 @@ final class BootStateRestorer {
         }
     }
 
+    private void syncActualMode(int actual) {
+        if (actual == lastSyncedMode) return;
+        try {
+            BatterySocHook.dispatchActual(carManager, BatterySocHook.CHARGE_MODE, actual);
+            lastSyncedMode = actual;
+        } catch (Throwable error) {
+            // UI notification failures must not trigger additional mode requests.
+            BatterySocHook.logFailure("Could not synchronize restored charge mode to settings", error);
+        }
+    }
+
     private int read(int function) {
         return (Integer) XposedHelpers.callMethod(carManager, "getFunctionValue",
                 new Class<?>[]{int.class}, function);
@@ -289,6 +347,7 @@ final class BootStateRestorer {
         stopped = true;
         pending = false;
         handler.removeCallbacksAndMessages(null);
+        hevGate.stop();
         for (XC_MethodHook.Unhook hook : hooks) {
             if (hook != null) {
                 hook.unhook();

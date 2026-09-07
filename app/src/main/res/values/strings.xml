@@ -1,7 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ECARX 保电修复</string>
-    <string name="module_description">恢复保电状态并补发目标电量；通过文本文件控制 EV/HEV、智能保电和低速提示，另提供实际状态文件。</string>
+    <string name="module_description">可配置开机延时与先切换 HEV，再恢复保电并同步原车界面；支持文件控制及实际状态输出。</string>
+    <string name="boot_settings_title">开机恢复设置</string>
+    <string name="boot_settings_intro">延时结束后执行开机恢复。开启下方选项时，先确认 HEV 已生效，再恢复上次保电状态并补发目标电量。</string>
+    <string name="force_hev_label">每次开机先切换 HEV</string>
+    <string name="boot_delay_label">开机执行延时：%1$d 秒</string>
+    <string name="boot_delay_hint">可调范围为 5 秒至 5 分钟，从本次开机原车设置应用启动开始计时。关闭 HEV 选项时，延时后按原驾驶模式恢复保电。</string>
+    <string name="seconds_short">%1$d 秒</string>
+    <string name="save_boot_settings">保存设置</string>
+    <string name="boot_settings_saved">已保存，下次车机重启生效</string>
+    <string name="boot_settings_save_failed">保存失败，请重新保存</string>
+    <string name="boot_sync_hint">原车设置界面和状态文件依据车辆回读同步。HEV 未确认成功时，不继续自动恢复保电；手动切换或写入 EV/HEV、保电控制文件会取消待执行的开机任务。</string>
     <string-array name="xposed_scope">
         <item>ecarx.settings</item>
     </string-array>

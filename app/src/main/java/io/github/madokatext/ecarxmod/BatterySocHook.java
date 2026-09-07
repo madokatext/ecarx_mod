@@ -46,7 +46,7 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam loaded) {
-        if (!PACKAGE.equals(loaded.packageName)) {
+        if (!PACKAGE.equals(loaded.packageName) || !PACKAGE.equals(loaded.processName)) {
             return;
         }
 
@@ -65,7 +65,9 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
                     carClass, "setFunctionValue", int.class, int.class, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
-                            fileControl.onHostRequest((Integer) param.args[0]);
+                            int function = (Integer) param.args[0];
+                            fileControl.onHostRequest(function);
+                            if (!fileControl.isDispatching()) restart.onExternalRequest(function);
                         }
 
                         @Override
@@ -180,6 +182,18 @@ public final class BatterySocHook implements IXposedHookLoadPackage {
     static boolean isCarReady(Object manager) {
         return Boolean.TRUE.equals(XposedHelpers.callMethod(manager, "isCarConnected"))
                 && XposedHelpers.getObjectField(manager, "mCarFunction") != null;
+    }
+
+    static void dispatchActual(Object manager, int function, int actual) {
+        // Never synthesize UI state from a requested value. Callers supply vehicle readback.
+        for (VehicleControl control : VehicleControl.values()) {
+            if (control.function == function && !control.stateValue(actual).isEmpty()) {
+                Object watcher = XposedHelpers.getObjectField(manager, "mWatcher");
+                XposedHelpers.callMethod(watcher, "onFunctionValueChanged",
+                        new Class<?>[]{int.class, int.class, int.class}, function, 0, actual);
+                return;
+            }
+        }
     }
 
     static int readTarget(Context context) {
