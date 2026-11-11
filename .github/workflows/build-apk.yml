@@ -31,6 +31,9 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The retired 'tools' package in the action's defaults is no longer available.
+          packages: 'platform-tools'
 
       - name: Install compile SDK and build tools
         run: sdkmanager "platforms;android-28" "build-tools;34.0.0"
