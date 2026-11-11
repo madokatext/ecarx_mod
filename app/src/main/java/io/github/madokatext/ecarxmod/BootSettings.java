@@ -9,7 +9,12 @@ import android.os.Bundle;
 final class BootSettings {
     static final Uri URI = Uri.parse("content://io.github.madokatext.ecarxmod.bootsettings");
     static final String READ = "read_boot_settings";
+    // Keep the old boolean for upgrades and already-loaded hosts using the old contract.
     static final String ENABLED = "force_hev_on_boot";
+    static final String POWER_MODE = "boot_power_mode";
+    static final int MODE_DISABLED = 0;
+    static final int MODE_EV = 1;
+    static final int MODE_HEV = 2;
     static final String DELAY = "boot_delay_seconds";
     static final String DISABLE_LOW_SPEED = "disable_low_speed_warning_on_boot";
     static final String HVAC_CORRECTION = "correct_hvac_circulation";
@@ -25,10 +30,26 @@ final class BootSettings {
         return Math.max(MIN_DELAY, Math.min(MAX_DELAY, seconds));
     }
 
+    static int validPowerMode(int mode) {
+        return mode == MODE_EV || mode == MODE_HEV ? mode : MODE_DISABLED;
+    }
+
+    static int powerMode(Bundle settings) {
+        if (settings.containsKey(POWER_MODE)) {
+            return validPowerMode(settings.getInt(POWER_MODE));
+        }
+        return settings.getBoolean(ENABLED, true) ? MODE_HEV : MODE_DISABLED;
+    }
+
     static Bundle readLocal(Context context) {
         SharedPreferences preferences = preferences(context);
         Bundle result = new Bundle();
-        result.putBoolean(ENABLED, preferences.getBoolean(ENABLED, true));
+        int mode = preferences.contains(POWER_MODE)
+                ? validPowerMode(preferences.getInt(POWER_MODE, MODE_DISABLED))
+                : (preferences.getBoolean(ENABLED, true) ? MODE_HEV : MODE_DISABLED);
+        result.putInt(POWER_MODE, mode);
+        // An old host must never translate an EV selection into a forced HEV request.
+        result.putBoolean(ENABLED, mode == MODE_HEV);
         result.putBoolean(DISABLE_LOW_SPEED, preferences.getBoolean(DISABLE_LOW_SPEED, true));
         result.putBoolean(HVAC_CORRECTION, preferences.getBoolean(HVAC_CORRECTION, false));
         result.putInt(DELAY, clampDelay(preferences.getInt(DELAY, MIN_DELAY)));

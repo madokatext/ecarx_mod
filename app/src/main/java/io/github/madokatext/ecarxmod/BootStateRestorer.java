@@ -36,7 +36,8 @@ final class BootStateRestorer {
     private final Runnable attempt = this::restoreIfReady;
     private final Runnable lowSpeedAttempt = this::runLowSpeedStage;
     private final BootLowSpeedAction lowSpeed = new BootLowSpeedAction();
-    private final BootHevGate hevGate = new BootHevGate(this::wakeAfterConfiguration, lowSpeed);
+    private final BootPowerModeGate powerModeGate =
+            new BootPowerModeGate(this::wakeAfterConfiguration, lowSpeed);
     private Context context;
     private Object carManager;
     private boolean pending;
@@ -100,7 +101,7 @@ final class BootStateRestorer {
         Context application = host.getApplicationContext();
         context = application != null ? application : host;
         lowSpeed.attach(context);
-        hevGate.attach(context);
+        powerModeGate.attach(context);
     }
 
     private synchronized void wakeAfterConfiguration() {
@@ -120,7 +121,7 @@ final class BootStateRestorer {
         synchronized (this) {
             pending = false;
             handler.removeCallbacks(attempt);
-            hevGate.cancel();
+            powerModeGate.cancel();
             releaseLowSpeed();
         }
     }
@@ -158,7 +159,7 @@ final class BootStateRestorer {
         fileModeOwned = true;
         pending = false;
         handler.removeCallbacks(attempt);
-        hevGate.cancel();
+        powerModeGate.cancel();
         releaseLowSpeed();
     }
 
@@ -183,7 +184,7 @@ final class BootStateRestorer {
             synchronized (BootStateRestorer.this) {
                 if (stopped) return;
                 carManager = manager;
-                // Manual/file HEV ownership cannot suppress the other boot feature.
+                // Manual/file EV/HEV ownership cannot suppress the other boot feature.
                 scheduleLowSpeed(connected ? 100 : 1000);
                 if (fileModeOwned || revision != requestRevision.get()) {
                     return;
@@ -223,21 +224,21 @@ final class BootStateRestorer {
             return;
         }
         try {
-            BootHevGate.Result gate;
+            BootPowerModeGate.Result gate;
             restoring.set(true);
             try {
-                gate = hevGate.step(carManager);
+                gate = powerModeGate.step(carManager);
             } finally {
                 restoring.remove();
             }
-            if (gate == BootHevGate.Result.STOP) {
+            if (gate == BootPowerModeGate.Result.STOP) {
                 pending = false;
                 releaseLowSpeed();
                 return;
             }
-            if (gate == BootHevGate.Result.WAIT) {
-                if (hevGate.isWaitingForVehicle()) releaseLowSpeed();
-                schedule(hevGate.nextDelayMs());
+            if (gate == BootPowerModeGate.Result.WAIT) {
+                if (powerModeGate.isWaitingForVehicle()) releaseLowSpeed();
+                schedule(powerModeGate.nextDelayMs());
                 return;
             }
             long remaining = chargeConfirmAfter - SystemClock.elapsedRealtime();
@@ -258,6 +259,8 @@ final class BootStateRestorer {
             }
             syncActualMode(actual);
             int desired = state.getInt(LAST_MODE, UNKNOWN);
+            // Power-mode selection and vehicle EV readbacks never overwrite charge memory.
+            // Only explicit charge requests (or the first valid state with no history) set it.
             if (!state.contains(LAST_MODE)) {
                 // First installation has no history: adopt a valid vehicle state, never guess ON.
                 desired = actual;
@@ -341,21 +344,21 @@ final class BootStateRestorer {
     private synchronized void runLowSpeedStage() {
         if (stopped || context == null || carManager == null) return;
         try {
-            BootHevGate.Result delay = hevGate.sharedDelayStatus();
-            if (delay == BootHevGate.Result.STOP) return;
-            if (delay == BootHevGate.Result.WAIT) {
-                scheduleLowSpeed(hevGate.sharedDelayRemainingMs());
+            BootPowerModeGate.Result delay = powerModeGate.sharedDelayStatus();
+            if (delay == BootPowerModeGate.Result.STOP) return;
+            if (delay == BootPowerModeGate.Result.WAIT) {
+                scheduleLowSpeed(powerModeGate.sharedDelayRemainingMs());
                 return;
             }
             if (!lowSpeed.isPending()) return;
             // Preserve normal ordering when both options are enabled. Waiting/failed charge
             // restoration releases this action rather than making success a prerequisite.
-            if (hevGate.isHevEnabled() && pending && !lowSpeedReleased) {
+            if (powerModeGate.isPowerModeEnabled() && pending && !lowSpeedReleased) {
                 if (BatterySocHook.isCarReady(carManager)) {
                     scheduleLowSpeed(500);
                     return;
                 }
-                // A disconnect can pause the HEV timer; keep this action independently bounded.
+                // A disconnect can pause the EV/HEV timer; keep this action independently bounded.
                 lowSpeedReleased = true;
             }
             boolean finished;
@@ -420,7 +423,7 @@ final class BootStateRestorer {
         stopped = true;
         pending = false;
         handler.removeCallbacksAndMessages(null);
-        hevGate.stop();
+        powerModeGate.stop();
         lowSpeed.stop();
         for (XC_MethodHook.Unhook hook : hooks) {
             if (hook != null) {

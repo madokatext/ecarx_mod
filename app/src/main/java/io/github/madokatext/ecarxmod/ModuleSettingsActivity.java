@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.os.Bundle;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Switch;
@@ -12,6 +14,11 @@ import android.widget.Toast;
 
 /** Native Android 9 settings screen, accessible from the launcher and LSPosed. */
 public final class ModuleSettingsActivity extends Activity {
+    private static final int POWER_MODE_GROUP = 1001;
+    private static final int POWER_MODE_OFF = 1010;
+    private static final int POWER_MODE_EV = 1011;
+    private static final int POWER_MODE_HEV = 1012;
+
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         setTitle(R.string.app_name);
@@ -26,13 +33,18 @@ public final class ModuleSettingsActivity extends Activity {
         body.addView(text(getString(R.string.boot_settings_title), 28));
         body.addView(text(getString(R.string.boot_settings_intro), 18));
 
-        Switch enabled = new Switch(this);
-        enabled.setId(1001);
-        enabled.setText(R.string.force_hev_label);
-        enabled.setTextSize(22);
-        enabled.setMinHeight(dp(72));
-        enabled.setChecked(saved.getBoolean(BootSettings.ENABLED));
-        body.addView(enabled, matchWidth());
+        body.addView(text(getString(R.string.boot_power_mode_label), 22));
+        RadioGroup powerMode = new RadioGroup(this);
+        powerMode.setId(POWER_MODE_GROUP);
+        powerMode.setOrientation(LinearLayout.VERTICAL);
+        addPowerMode(powerMode, POWER_MODE_OFF, R.string.boot_power_mode_off);
+        addPowerMode(powerMode, POWER_MODE_EV, R.string.boot_power_mode_ev);
+        addPowerMode(powerMode, POWER_MODE_HEV, R.string.boot_power_mode_hev);
+        int savedMode = BootSettings.powerMode(saved);
+        powerMode.check(savedMode == BootSettings.MODE_EV ? POWER_MODE_EV
+                : savedMode == BootSettings.MODE_HEV ? POWER_MODE_HEV : POWER_MODE_OFF);
+        body.addView(powerMode, matchWidth());
+        body.addView(text(getString(R.string.boot_power_mode_hint), 18));
 
         Switch disableLowSpeed = new Switch(this);
         disableLowSpeed.setId(1003);
@@ -90,8 +102,10 @@ public final class ModuleSettingsActivity extends Activity {
         saveLayout.topMargin = dp(16);
         body.addView(save, saveLayout);
         save.setOnClickListener(view -> {
+            int selectedMode = selectedPowerMode(powerMode);
             boolean success = BootSettings.preferences(this).edit()
-                    .putBoolean(BootSettings.ENABLED, enabled.isChecked())
+                    .putInt(BootSettings.POWER_MODE, selectedMode)
+                    .putBoolean(BootSettings.ENABLED, selectedMode == BootSettings.MODE_HEV)
                     .putBoolean(BootSettings.DISABLE_LOW_SPEED, disableLowSpeed.isChecked())
                     .putBoolean(BootSettings.HVAC_CORRECTION, hvacCorrection.isChecked())
                     .putInt(BootSettings.DELAY, delay.getProgress() + BootSettings.MIN_DELAY).commit();
@@ -103,15 +117,31 @@ public final class ModuleSettingsActivity extends Activity {
     }
 
     @Override protected void onSaveInstanceState(Bundle state) {
-        Switch enabled = findViewById(1001);
+        RadioGroup powerMode = findViewById(POWER_MODE_GROUP);
         SeekBar delay = findViewById(1002);
         Switch disableLowSpeed = findViewById(1003);
         Switch hvacCorrection = findViewById(1004);
-        state.putBoolean(BootSettings.ENABLED, enabled.isChecked());
+        state.putInt(BootSettings.POWER_MODE, selectedPowerMode(powerMode));
         state.putBoolean(BootSettings.DISABLE_LOW_SPEED, disableLowSpeed.isChecked());
         state.putBoolean(BootSettings.HVAC_CORRECTION, hvacCorrection.isChecked());
         state.putInt(BootSettings.DELAY, delay.getProgress() + BootSettings.MIN_DELAY);
         super.onSaveInstanceState(state);
+    }
+
+    private void addPowerMode(RadioGroup group, int id, int label) {
+        RadioButton option = new RadioButton(this);
+        option.setId(id);
+        option.setText(label);
+        option.setTextSize(22);
+        option.setMinimumHeight(dp(64));
+        group.addView(option, matchWidth());
+    }
+
+    private int selectedPowerMode(RadioGroup group) {
+        int selected = group.getCheckedRadioButtonId();
+        if (selected == POWER_MODE_EV) return BootSettings.MODE_EV;
+        if (selected == POWER_MODE_HEV) return BootSettings.MODE_HEV;
+        return BootSettings.MODE_DISABLED;
     }
 
     private TextView text(String value, int size) {

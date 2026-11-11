@@ -16,15 +16,17 @@ import java.nio.file.Paths;
 
 import de.robv.android.xposed.XposedHelpers;
 
-/** Delays boot restoration and confirms HEV once per OS boot before allowing charge writes. */
-final class BootHevGate {
+/** Confirms the selected EV/HEV mode once per OS boot before allowing charge restoration. */
+final class BootPowerModeGate {
     enum Result { WAIT, READY, STOP }
 
     private static final String TAG = "EcarxSocFix";
+    // Retain existing boot keys so an in-place upgrade cannot reset the same boot's budget.
     private static final String BOOT_ID = "hev_boot_id";
     private static final String STATUS = "hev_boot_status";
     private static final String STARTED = "hev_boot_started";
     private static final String ENABLED = "hev_boot_enabled";
+    private static final String POWER_MODE = "boot_power_mode_snapshot";
     private static final String DELAY = "hev_boot_delay";
     private static final String WRITES = "hev_boot_writes";
     private static final String LAST_WRITE = "hev_boot_last_write";
@@ -46,7 +48,7 @@ final class BootHevGate {
     private boolean configured;
     private boolean settingsAvailable;
     private boolean cancelled;
-    private boolean enabled;
+    private int powerMode = BootSettings.MODE_DISABLED;
     private boolean waitingForVehicle;
     private String status = WAITING;
     private long startedAt;
@@ -57,7 +59,7 @@ final class BootHevGate {
     private int writes;
     private int lastSynced = -1;
 
-    BootHevGate(Runnable wake, BootLowSpeedAction lowSpeed) {
+    BootPowerModeGate(Runnable wake, BootLowSpeedAction lowSpeed) {
         this.wake = wake;
         this.lowSpeed = lowSpeed;
     }
@@ -81,7 +83,9 @@ final class BootHevGate {
             if (!id.equals(state.getString(BOOT_ID, ""))) {
                 // Binder/provider startup must not block the settings app's main thread.
                 settings = context.getContentResolver().call(BootSettings.URI, BootSettings.READ, null, null);
-                if (settings == null || !settings.containsKey(BootSettings.ENABLED)
+                if (settings == null
+                        || (!settings.containsKey(BootSettings.POWER_MODE)
+                            && !settings.containsKey(BootSettings.ENABLED))
                         || !settings.containsKey(BootSettings.DISABLE_LOW_SPEED)
                         || !settings.containsKey(BootSettings.DELAY)) {
                     throw new IllegalStateException("Module boot settings are unavailable");
@@ -119,15 +123,19 @@ final class BootHevGate {
         if (stopped) return;
         try {
             if (settings != null) {
+                int selectedMode = BootSettings.powerMode(settings);
                 SharedPreferences.Editor editor = state.edit().putString(BOOT_ID, id)
                         .putString(STATUS, cancelled ? CANCELLED : WAITING)
-                        .putBoolean(ENABLED, settings.getBoolean(BootSettings.ENABLED))
+                        .putInt(POWER_MODE, selectedMode)
+                        .putBoolean(ENABLED, selectedMode == BootSettings.MODE_HEV)
                         .putInt(DELAY, BootSettings.clampDelay(settings.getInt(BootSettings.DELAY)))
                         .putLong(STARTED, startedAt).putInt(WRITES, 0).putLong(LAST_WRITE, 0);
                 lowSpeed.initializeForBoot(editor, settings.getBoolean(BootSettings.DISABLE_LOW_SPEED));
                 commit(editor);
             }
-            enabled = state.getBoolean(ENABLED, true);
+            powerMode = state.contains(POWER_MODE)
+                    ? BootSettings.validPowerMode(state.getInt(POWER_MODE, BootSettings.MODE_DISABLED))
+                    : (state.getBoolean(ENABLED, true) ? BootSettings.MODE_HEV : BootSettings.MODE_DISABLED);
             dueAt = state.getLong(STARTED, startedAt)
                     + BootSettings.clampDelay(state.getInt(DELAY, BootSettings.MIN_DELAY)) * 1000L;
             writes = Math.max(0, state.getInt(WRITES, 0));
@@ -139,7 +147,7 @@ final class BootHevGate {
             }
             settingsAvailable = true;
             configured = true;
-            Log.i(TAG, "Boot HEV enabled=" + enabled + ", status=" + status
+            Log.i(TAG, "Boot power mode=" + modeName() + ", status=" + status
                     + ", remaining delay=" + Math.max(0, dueAt - SystemClock.elapsedRealtime()) + " ms");
         } catch (Throwable error) {
             configured = true;
@@ -148,7 +156,7 @@ final class BootHevGate {
         wake.run();
     }
 
-    // Called by BootStateRestorer with its own-write ThreadLocal set, so HEV requests cannot
+    // Called by BootStateRestorer with its own-write ThreadLocal set, so EV/HEV requests cannot
     // be mistaken for manual edits. All state below is confined to the host's main looper.
     Result step(Object manager) {
         waitMs = 1000;
@@ -164,7 +172,7 @@ final class BootHevGate {
             return Result.WAIT;
         }
         try {
-            if (!enabled) {
+            if (!isPowerModeEnabled()) {
                 complete();
                 return Result.READY;
             }
@@ -181,13 +189,14 @@ final class BootHevGate {
                 waitMs = lastWriteAt + 1000 - now;
                 return Result.WAIT;
             }
-            if (actual == HEV) {
+            int desired = powerMode == BootSettings.MODE_EV ? EV : HEV;
+            if (actual == desired) {
                 complete();
-                Log.i(TAG, "Boot HEV readback matched; continuing charge restore");
+                Log.i(TAG, "Boot " + modeName() + " readback matched; continuing charge restore");
                 return Result.READY;
             }
-            if (writes >= 2) return fail("HEV not confirmed after two requests", null);
-            if (actual != EV && actual != SAVE) return waitForVehicle(now);
+            if (writes >= 2) return fail(modeName() + " not confirmed after two requests", null);
+            if (actual != EV && actual != HEV && actual != SAVE) return waitForVehicle(now);
             if (now >= dueAt + 60000) return fail("vehicle readiness timed out", null);
 
             // Persist the budget before sending; process restarts cannot reset the retry count.
@@ -195,11 +204,11 @@ final class BootHevGate {
             writes++;
             lastWriteAt = now;
             XposedHelpers.callMethod(manager, "setFunctionValue", new Class<?>[]{int.class, int.class},
-                    VehicleControl.EV_HEV.function, HEV);
-            Log.i(TAG, "Boot HEV request " + writes + "/2");
+                    VehicleControl.EV_HEV.function, desired);
+            Log.i(TAG, "Boot " + modeName() + " request " + writes + "/2");
             return Result.WAIT;
         } catch (Throwable error) {
-            BatterySocHook.logFailure("Boot HEV request/readback could not complete", error);
+            BatterySocHook.logFailure("Boot EV/HEV request/readback could not complete", error);
             return waitForVehicle(now);
         }
     }
@@ -216,7 +225,7 @@ final class BootHevGate {
             BatterySocHook.dispatchActual(manager, VehicleControl.EV_HEV.function, actual);
             lastSynced = actual;
         } catch (Throwable error) {
-            BatterySocHook.logFailure("Could not synchronize boot HEV readback to settings", error);
+            BatterySocHook.logFailure("Could not synchronize boot EV/HEV readback to settings", error);
         }
     }
 
@@ -230,7 +239,7 @@ final class BootHevGate {
         try {
             if (state != null && configured) commit(state.edit().putString(STATUS, FAILED));
         } catch (Throwable persistenceError) {
-            BatterySocHook.logFailure("Could not record stopped HEV sequence", persistenceError);
+            BatterySocHook.logFailure("Could not record stopped EV/HEV sequence", persistenceError);
         }
         Log.w(TAG, "Stopped boot restore: " + reason, error);
         return Result.STOP;
@@ -248,14 +257,14 @@ final class BootHevGate {
             try {
                 commit(state.edit().putString(STATUS, CANCELLED));
             } catch (Throwable error) {
-                BatterySocHook.logFailure("Could not remember cancelled boot HEV sequence", error);
+                BatterySocHook.logFailure("Could not remember cancelled boot EV/HEV sequence", error);
             }
         }
     }
 
     long nextDelayMs() { return Math.max(100, waitMs); }
 
-    // The shared timer/configuration is independent of HEV success or cancellation.
+    // The shared timer/configuration is independent of EV/HEV success or cancellation.
     Result sharedDelayStatus() {
         if (stopped) return Result.STOP;
         if (!configured) return Result.WAIT;
@@ -267,7 +276,13 @@ final class BootHevGate {
         return configured ? Math.max(100, dueAt - SystemClock.elapsedRealtime()) : 500;
     }
 
-    boolean isHevEnabled() { return enabled; }
+    boolean isPowerModeEnabled() { return powerMode != BootSettings.MODE_DISABLED; }
+
+    private String modeName() {
+        if (powerMode == BootSettings.MODE_EV) return "EV";
+        if (powerMode == BootSettings.MODE_HEV) return "HEV";
+        return "disabled";
+    }
 
     boolean isWaitingForVehicle() { return waitingForVehicle; }
 

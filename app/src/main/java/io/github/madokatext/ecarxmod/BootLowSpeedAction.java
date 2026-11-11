@@ -32,7 +32,7 @@ final class BootLowSpeedAction {
     }
 
     void initializeForBoot(SharedPreferences.Editor editor, boolean enabled) {
-        // Committed together with the HEV stage's boot ID and shared delay snapshot.
+        // Committed together with the EV/HEV stage's boot ID and shared delay snapshot.
         editor.putBoolean(ENABLED, enabled)
                 .putString(STATUS, cancelled ? "cancelled" : enabled ? WAITING : "disabled")
                 .putInt(WRITES, 0).putLong(STARTED, 0).putLong(LAST_WRITE, 0);
