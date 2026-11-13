@@ -1,8 +1,8 @@
 # ECARX 保电修复
 
-用于 Android 9 车机、LSPosed API 93 的模块，作用域为 `ecarx.settings` 和 `ecarx.hvac.app`。当前版本 **1.6.0**：新增“启动后动力模式”三选一，可在每次车机重启后切换为 **EV**、切换为 **HEV**，或**关闭自动切换**。EV／HEV 选择与保电状态、目标电量分别保存；切换 EV 不覆盖保电记忆。升级时沿用原 HEV 开关：原开启对应 HEV、原关闭对应关闭自动切换；首次安装仍默认 HEV。保留独立低速提示开关、共享 **5–300 秒**启动延时、保电恢复及文件接口。空调 AQS／G-clean 纠正开关继续**默认关闭**，保存后约 1 秒内生效，文件控制独立可用；开启后每次自动变更最多纠正 **2 次**，并让出一键除雾／除霜等必要切换。
+用于 Android 9 车机、LSPosed API 93 的模块，作用域为 `ecarx.settings` 和 `ecarx.hvac.app`。当前版本 **1.7.0**：新增可选的第三方音乐仪表转发，支持标准 Android 媒体会话的歌名、歌手、专辑、播放状态和进度；媒体中心控制回调可转给当前播放器。转发**默认关闭**，提供状态显示、通知访问备用入口和 `EcarxMediaBridge` logcat 调试日志。保留启动后 EV／HEV／关闭切换三选一、独立保电记忆、低速提示、共享 **5–300 秒**延时、文件控制和默认关闭的空调 AQS／G-clean 纠正。
 
-适配依据是 XCSettings2 **3.0.0.0064（versionCode 3000064）** 和 XCHvac **2.3.0.026（versionCode 230026）** 的本地 APK／VDEX 中的类名、方法和功能 ID。按需求未执行单元测试、设备测试或实车验证；GitHub Actions 只编译和打包 APK。
+设置及空调适配依据是 XCSettings2 **3.0.0.0064（versionCode 3000064）** 和 XCHvac **2.3.0.026（versionCode 230026）** 的本地 APK／VDEX。媒体字段和状态参考多媒体 **4.0.0 (2625D5E)** 的实际调用，底层客户端契约参考公开 ECARX 753 适配实现并在运行时检查；不同固件缺失权限、SDK 类型或服务时会记录失败，不假定兼容。按需求未执行单元测试、设备测试或实车验证；GitHub Actions 只编译和打包 APK。
 
 1.3.0 设置页曾调用 `SeekBar` 继承的 `ProgressBar.setMinHeight(int)`，该方法从 API 29 才提供，在 Android 9 会触发 `NoSuchMethodError`。1.3.1 改用从 API 1 就支持的 `View.setMinimumHeight(int)`，并用 API 28 的 Android 框架声明编译，阻止直接引用更新版本的框架 API。[ProgressBar 官方文档](https://developer.android.com/reference/android/widget/ProgressBar#setMinHeight(int))、[View 官方文档](https://developer.android.com/reference/android/view/View#setMinimumHeight(int))。
 
@@ -18,6 +18,68 @@
 首次安装本版本尚无开关历史时，采用车辆首次返回的有效保电模式作为初始记忆，不默认强制开启。此后操作一次原车保电开关，就会记录新的状态。
 
 禁用模块并重启目标进程即可恢复原应用行为。
+
+## 第三方音乐转发到仪表
+
+1. 安装 1.7.0，在 LSPosed 保持勾选 **`ecarx.settings`**，重启车机加载新增入口。此功能沿用现有设置作用域，无需勾选系统框架、原厂多媒体或每一个第三方播放器。
+2. 打开模块设置，在“第三方音乐与仪表”中开启“转发第三方音乐到仪表”，保留默认开启的详细调试日志，点击“保存设置”。开关约 1 秒内被宿主读取，不需再为开关本身重启。
+3. 在目标音乐 App 中开始播放。模块每秒读取活动媒体会话，选择按系统优先级排列的正在播放来源；原厂 `com.ecarx.*` / `ecarx.*` 不作为第三方转发，HY 媒体代理也被排除。原厂会话优先播放时让出；已选中的第三方暂停时保留，停止或会话消失后释放。
+4. 系统 UID 的设置宿主优先直接读取会话。若日志出现 `MEDIA_CONTENT_CONTROL` 拒绝，点击“打开通知使用权（备用读取入口）”，允许 **ECARX 第三方音乐读取**。有些定制车机没有此设置页；此时优先看系统宿主能否读取。模块不会自动修改权限或启用通知使用权。
+5. 为避免两个代理争夺同一媒体显示，请关闭 HY 等其他软件的媒体接管功能。播放器需发布标准媒体会话及元数据；只播放声音、不发布会话的播放器需另行适配。
+
+模块以单独的媒体中心客户端发送信息，保电和空调逻辑不参与媒体转发。运行时连接的已知契约是：
+
+```text
+权限：ecarx.oem.permission.OPENAPI_MEDIACENTER_PERMISSION
+服务：ecarx.xsf.mediacenter/ecarx.xsf.mediacenter.MediaCenterService
+Action：ecarx.xsf.MEDIA_CENTER_SERVICE
+接口：ecarx.xsf.mediacenter.IMediaCenterSvc
+```
+
+通过系统内的 SDK 接口和包装类型反射构建客户端，不在 APK 中打包厂商 SDK。SDK 不在宿主类加载器时尝试车机的 `com.ecarx.systemui.plugin` 上下文。上述权限由已注入的原车设置 UID 提供；通知使用权只解决读取端，不会授予媒体中心访问权限。所提供 XCSettings2 使用 `android.uid.system`，媒体 IPC Provider 仅允许本模块 UID 和系统 UID，其他应用不能读取媒体 token 或伪造状态。
+
+发送字段包括歌名、歌手、专辑、曲目 ID、时长、进度以及媒体中心 `PLAY=1 / PAUSE=0`；音源统一为在线媒体 `sourceType=6`。存在标准封面 URI 时附带该 URI；仅有 Bitmap 的封面暂不导出，不保证车机服务可以访问播放器的私有 URI。
+
+媒体中心的播放、暂停、上一首、下一首和选源回调会转给当前 `MediaController.TransportControls`；旧会话回调会被过滤。只在实际开始播放、换到新的正在播放会话或明确播放回调后请求播放归属；丢失归属后不会因每秒轮询持续抢回。停止或关闭时清理自己注册的媒体数据并注销，不替用户启动原厂播放器。注销最多尝试 3 次；注册结果不确定或注销持续失败时停止重建客户端，保留诊断，需重启宿主/车机恢复。
+
+界面显示“已提交媒体中心”代表该 API 返回接受，不等同于已经确认仪表渲染。状态更新时间长时间不变时，检查宿主是否运行或 IPC 是否阻塞；所有媒体 Binder 调用在独立工作线程，不占用设置界面主线程。
+
+### 媒体 logcat 调试
+
+实时查看：
+
+```sh
+adb logcat -v threadtime -s EcarxMediaBridge:D
+```
+
+复现一次“开始播放 → 切歌 → 暂停 → 恢复 → 停止”后导出历史日志：
+
+```sh
+adb logcat -d -v threadtime -s EcarxMediaBridge:D > ecarx-media-bridge.txt
+```
+
+日志阶段和含义：
+
+| 关键字 | 排查方向 |
+| --- | --- |
+| `[sender] started host=ecarx.settings uid=1000` | 新入口已经在原设置进程启动；缺失时先确认作用域和重启 |
+| `[reader] selected` / `[sender] input` | 是否读到播放器、歌名、歌手和 Android 原始状态 |
+| `MEDIA_CONTENT_CONTROL` | 系统会话读取权限不足，尝试通知备用入口 |
+| `[reader] notification listener connected` | 通知访问备用入口已实际连接 |
+| `[transport] probe` | 宿主 UID、媒体中心权限和服务组件 |
+| `contract resolved` | SDK 接口、包装类及方法签名匹配 |
+| `bind requested` / `service connected` | 车机服务绑定情况 |
+| `registerMusic tokenPresent=true` | 注册返回 token；日志不打印 token 本身 |
+| `requestPlay accepted=` | 媒体中心是否授予播放归属 |
+| `updateMusicPlaybackState accepted=` / `[sender] published` | 最终提交结果、来源包名、歌名、歌手和状态 |
+| `[callback] dispatched` | 已向选定播放器发送控制请求，不代表播放器执行已确认 |
+| `focus lost` | 已让出媒体归属，等待真实播放变化或明确播放操作 |
+| `release confirmed` / `cleanup unconfirmed` | 注销成功，或停止重复注册等待排查 |
+| `[ipc] begin` 没有对应 `end` | 该厂商调用可能阻塞；结合状态更新时间检查 |
+
+信息级日志保留启动、曲目变化、注册/发送/注销、控制与 30 秒心跳；详细调试开关增加 IPC 阶段、每 15 秒进度和未处理回调日志。同类读取/发送错误约 30 秒限频；日志包含用于调试的歌名和歌手，不打印会话 token、完整封面 URI 或图片内容。
+
+兼容性参考：[Android MediaSessionManager](https://developer.android.com/reference/android/media/session/MediaSessionManager)、[ECARX 媒体中心公开接口探测记录](https://github.com/jianyun8023/diplay-ecarx/blob/4145550a4c59b9a4518e6774c9ce70bb896245dd/common/src/main/java/com/shihab/diplay/mediacenter/MediaCenterProbe.kt)。
 
 Actions 默认生成 **debug 签名、可安装的 APK**，不需要配置仓库密钥。不同运行的临时 debug 签名可能不同；遇到签名不一致而不能覆盖安装时，先卸载旧的本模块再安装。原车 `ecarx.settings` 及其保电设置不属于本模块数据。
 

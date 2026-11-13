@@ -20,6 +20,19 @@
             android:authorities="io.github.madokatext.ecarxmod.bootsettings"
             android:directBootAware="true"
             android:exported="true" />
+        <provider
+            android:name=".MediaBridgeProvider"
+            android:authorities="io.github.madokatext.ecarxmod.media"
+            android:exported="true" />
+        <service
+            android:name=".MediaNotificationListener"
+            android:label="@string/media_listener_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
         <meta-data android:name="xposedmodule" android:value="true" />
         <meta-data android:name="xposeddescription" android:value="@string/module_description" />
         <meta-data android:name="xposedminversion" android:value="93" />

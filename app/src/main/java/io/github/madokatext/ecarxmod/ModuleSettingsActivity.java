@@ -1,7 +1,15 @@
 package io.github.madokatext.ecarxmod;
 
 import android.app.Activity;
+import android.app.NotificationManager;
+import android.content.ComponentName;
+import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.provider.Settings;
+import android.service.notification.NotificationListenerService;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.RadioButton;
@@ -18,6 +26,21 @@ public final class ModuleSettingsActivity extends Activity {
     private static final int POWER_MODE_OFF = 1010;
     private static final int POWER_MODE_EV = 1011;
     private static final int POWER_MODE_HEV = 1012;
+    private TextView mediaStatus;
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final Runnable refreshMedia = new Runnable() {
+        @Override public void run() {
+            if (mediaStatus == null) return;
+            Bundle status = MediaBridgeState.status();
+            long updated = status.getLong("sender_updated");
+            String age = updated == 0 ? "" : "\n宿主状态更新于 "
+                    + Math.max(0, (SystemClock.elapsedRealtime() - updated) / 1000) + " 秒前";
+            mediaStatus.setText("通知使用权：" + (notificationAccess() ? "已开启" : "未开启")
+                    + "\n" + status.getString("sender_status") + age
+                    + "\n" + status.getString("reader_status"));
+            main.postDelayed(this, 1500);
+        }
+    };
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -94,6 +117,36 @@ public final class ModuleSettingsActivity extends Activity {
         body.addView(hvacCorrection, matchWidth());
         body.addView(text(getString(R.string.hvac_correction_hint), 18));
 
+        body.addView(text(getString(R.string.media_settings_title), 26));
+        Switch mediaForward = new Switch(this);
+        mediaForward.setId(1005);
+        mediaForward.setText(R.string.media_forward_label);
+        mediaForward.setTextSize(22);
+        mediaForward.setMinimumHeight(dp(72));
+        mediaForward.setChecked(saved.getBoolean(BootSettings.MEDIA_FORWARD, false));
+        body.addView(mediaForward, matchWidth());
+        body.addView(text(getString(R.string.media_forward_hint), 18));
+        Switch mediaDebug = new Switch(this);
+        mediaDebug.setId(1006);
+        mediaDebug.setText(R.string.media_debug_label);
+        mediaDebug.setTextSize(22);
+        mediaDebug.setMinimumHeight(dp(64));
+        mediaDebug.setChecked(saved.getBoolean(BootSettings.MEDIA_DEBUG, true));
+        body.addView(mediaDebug, matchWidth());
+        Button notification = new Button(this);
+        notification.setText(R.string.media_notification_access);
+        notification.setOnClickListener(view -> {
+            try { startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)); }
+            catch (Exception error) {
+                MediaBridgeState.error("[settings] notification access screen unavailable", error);
+                Toast.makeText(this, R.string.media_notification_unavailable, Toast.LENGTH_LONG).show();
+            }
+        });
+        body.addView(notification, matchWidth());
+        mediaStatus = text("", 17);
+        mediaStatus.setTextIsSelectable(true);
+        body.addView(mediaStatus, matchWidth());
+
         Button save = new Button(this);
         save.setText(R.string.save_boot_settings);
         save.setTextSize(20);
@@ -108,7 +161,17 @@ public final class ModuleSettingsActivity extends Activity {
                     .putBoolean(BootSettings.ENABLED, selectedMode == BootSettings.MODE_HEV)
                     .putBoolean(BootSettings.DISABLE_LOW_SPEED, disableLowSpeed.isChecked())
                     .putBoolean(BootSettings.HVAC_CORRECTION, hvacCorrection.isChecked())
+                    .putBoolean(BootSettings.MEDIA_FORWARD, mediaForward.isChecked())
+                    .putBoolean(BootSettings.MEDIA_DEBUG, mediaDebug.isChecked())
                     .putInt(BootSettings.DELAY, delay.getProgress() + BootSettings.MIN_DELAY).commit();
+            if (success) {
+                MediaBridgeState.info("[settings] saved mediaForward=" + mediaForward.isChecked()
+                        + " mediaDebug=" + mediaDebug.isChecked());
+                if (mediaForward.isChecked() && notificationAccess()) {
+                    try { NotificationListenerService.requestRebind(new ComponentName(this, MediaNotificationListener.class)); }
+                    catch (Exception error) { MediaBridgeState.error("[settings] listener rebind failed", error); }
+                }
+            }
             Toast.makeText(this, success ? R.string.boot_settings_saved : R.string.boot_settings_save_failed,
                     Toast.LENGTH_LONG).show();
         });
@@ -121,11 +184,32 @@ public final class ModuleSettingsActivity extends Activity {
         SeekBar delay = findViewById(1002);
         Switch disableLowSpeed = findViewById(1003);
         Switch hvacCorrection = findViewById(1004);
+        Switch mediaForward = findViewById(1005);
+        Switch mediaDebug = findViewById(1006);
         state.putInt(BootSettings.POWER_MODE, selectedPowerMode(powerMode));
         state.putBoolean(BootSettings.DISABLE_LOW_SPEED, disableLowSpeed.isChecked());
         state.putBoolean(BootSettings.HVAC_CORRECTION, hvacCorrection.isChecked());
+        state.putBoolean(BootSettings.MEDIA_FORWARD, mediaForward.isChecked());
+        state.putBoolean(BootSettings.MEDIA_DEBUG, mediaDebug.isChecked());
         state.putInt(BootSettings.DELAY, delay.getProgress() + BootSettings.MIN_DELAY);
         super.onSaveInstanceState(state);
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        main.removeCallbacks(refreshMedia);
+        main.post(refreshMedia);
+    }
+
+    @Override protected void onPause() {
+        main.removeCallbacks(refreshMedia);
+        super.onPause();
+    }
+
+    private boolean notificationAccess() {
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        return manager != null && manager.isNotificationListenerAccessGranted(
+                new ComponentName(this, MediaNotificationListener.class));
     }
 
     private void addPowerMode(RadioGroup group, int id, int label) {

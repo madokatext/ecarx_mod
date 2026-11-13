@@ -18,6 +18,8 @@ final class BootSettings {
     static final String DELAY = "boot_delay_seconds";
     static final String DISABLE_LOW_SPEED = "disable_low_speed_warning_on_boot";
     static final String HVAC_CORRECTION = "correct_hvac_circulation";
+    static final String MEDIA_FORWARD = "media_forward_to_cluster";
+    static final String MEDIA_DEBUG = "media_bridge_debug";
     static final int MIN_DELAY = 5;
     static final int MAX_DELAY = 300;
 
@@ -52,6 +54,8 @@ final class BootSettings {
         result.putBoolean(ENABLED, mode == MODE_HEV);
         result.putBoolean(DISABLE_LOW_SPEED, preferences.getBoolean(DISABLE_LOW_SPEED, true));
         result.putBoolean(HVAC_CORRECTION, preferences.getBoolean(HVAC_CORRECTION, false));
+        result.putBoolean(MEDIA_FORWARD, preferences.getBoolean(MEDIA_FORWARD, false));
+        result.putBoolean(MEDIA_DEBUG, preferences.getBoolean(MEDIA_DEBUG, true));
         result.putInt(DELAY, clampDelay(preferences.getInt(DELAY, MIN_DELAY)));
         return result;
     }
