@@ -38,6 +38,8 @@ final class MediaBridgeController {
     private String lastError;
     private long lastErrorAt;
     private String reader = "system";
+    private String readerIssue;
+    private String observedMode;
 
     MediaBridgeController(Context context) {
         this.context = context.getApplicationContext() == null ? context : context.getApplicationContext();
@@ -70,11 +72,17 @@ final class MediaBridgeController {
                 mediaFile.publish(current);
                 boolean playEdge = current != null && current.playing()
                         && (!current.sameSession(observed) || !observed.playing());
+                boolean idleEdge = enabled && current == null && observed != null;
+                String mode = !enabled ? "off" : current == null ? "status-only" : "media";
+                if (!mode.equals(observedMode)) {
+                    observedMode = mode;
+                    MediaBridgeState.info("[sender] output mode=" + mode);
+                }
                 if (current != null && !current.samePayload(observed)) {
                     MediaBridgeState.info("[sender] input " + current.describe());
                 }
                 observed = current;
-                drive(playEdge);
+                drive(playEdge, idleEdge);
             } catch (Throwable error) {
                 failure("read-or-publish", error);
                 beginCleanup(status + "；正在释放注册");
@@ -92,26 +100,32 @@ final class MediaBridgeController {
             try {
                 MediaBridgeState.Snapshot selected = source.poll(null);
                 reader = "system";
+                readerIssue = null;
                 return selected;
             } catch (SecurityException denied) {
                 nextDirectRead = now + 30000;
                 failure("MEDIA_CONTENT_CONTROL; trying notification listener", denied);
+            } catch (Throwable error) {
+                nextDirectRead = now + 5000;
+                failure("media reader; continuing vehicle status", error);
             }
         }
         reader = "notification";
         if (fallback.getBoolean("listener_connected")
                 && now - fallback.getLong("listener_updated") <= 5000) {
-            return MediaBridgeState.Snapshot.fromBundle(fallback);
+            try {
+                MediaBridgeState.Snapshot selected = MediaBridgeState.Snapshot.fromBundle(fallback);
+                readerIssue = null;
+                return selected;
+            } catch (Throwable error) { failure("notification snapshot; continuing vehicle status", error); }
         }
-        status = "无法读取媒体会话：请在模块中打开通知使用权；详见 EcarxMediaBridge 日志";
+        readerIssue = "曲目读取暂不可用，继续发送车辆状态；请检查通知使用权和日志";
         return null;
     }
 
-    private void drive(boolean playEdge) throws Exception {
-        if (!enabled || current == null) {
-            beginCleanup(!enabled ? "媒体转发关闭" : reader.equals("notification")
-                    ? "通知备用入口等待有效媒体信息，请检查通知使用权和播放器状态"
-                    : "等待第三方播放器开始播放（暂停保留，停止或会话消失后释放）");
+    private void drive(boolean playEdge, boolean idleEdge) throws Exception {
+        if (!enabled) {
+            beginCleanup("媒体转发关闭");
             return;
         }
         if (cleaning) return;
@@ -131,32 +145,46 @@ final class MediaBridgeController {
         transport.snapshot(current, vehicleStatus);
         boolean registeredNow = !transport.registered();
         if (registeredNow) transport.register();
-        if (!claimed && current.playing() && (playEdge || registeredNow || explicitPlay)) {
+        boolean statusOnly = current == null;
+        boolean requestOwnership = statusOnly ? registeredNow || idleEdge || explicitPlay
+                : current.playing() && (playEdge || registeredNow || explicitPlay);
+        if (!claimed && requestOwnership) {
+            MediaBridgeState.info("[sender] requesting ownership mode=" + (statusOnly ? "status-only" : "media"));
             claimed = transport.requestPlay();
-            published = null;
+            invalidatePublished();
         }
         explicitPlay = false;
         if (!claimed) {
-            status = "媒体中心未授予播放归属或已让出，等待播放器重新播放：" + current.appName;
+            status = "媒体中心未授予显示归属或已让出：" + (statusOnly ? "车辆状态卡片" : current.appName)
+                    + "；等待新曲目播放、进入无曲目模式或重新开启转发";
             return;
         }
-        boolean changed = !current.samePayload(published) || !vehicleStatus.equals(publishedVehicleStatus);
+        boolean changed = publishedVehicleStatus == null
+                || (statusOnly ? published != null : !current.samePayload(published))
+                || !vehicleStatus.equals(publishedVehicleStatus);
         boolean accepted = transport.publish(changed);
         if (accepted) {
             published = current;
             publishedVehicleStatus = vehicleStatus;
         } else throw new IllegalStateException("updateMusicPlaybackState returned false");
-        if (changed) MediaBridgeState.info("[sender] published " + current.describe()
+        if (changed) MediaBridgeState.info("[sender] published mode=" + (statusOnly ? "status-only" : "media")
+                + (statusOnly ? " state=PAUSE progress=0" : " " + current.describe())
                 + " displayTitle=\"" + MediaBridgeState.safe(MediaCenterTransport.displayTitle(current), 300)
                 + "\" displayArtist=\"" + vehicleStatus + "\" sourceType=6");
         if (MediaBridgeState.debug && now - lastProgressLog >= 15000) {
             lastProgressLog = now;
-            MediaBridgeState.trace("[sender] progress=" + current.progress() + " reader=" + reader);
+            MediaBridgeState.trace("[sender] progress=" + (statusOnly ? 0 : current.progress()) + " reader=" + reader);
         }
-        status = "已提交媒体中心（" + reader + "）：" + current.appName + " / "
-                + MediaBridgeState.safe(current.title, 100) + " / " + (current.playing() ? "播放" : "暂停")
+        status = "已提交媒体中心（" + reader + "）："
+                + (statusOnly ? "车辆状态 / 暂无播放" : current.appName + " / "
+                + MediaBridgeState.safe(current.title, 100) + " / " + (current.playing() ? "播放" : "暂停"))
                 + " / " + vehicleStatus
-                + "；仪表实际显示请在车上确认";
+                + "；仪表实际显示请在车上确认" + (readerIssue == null ? "" : "；" + readerIssue);
+    }
+
+    private void invalidatePublished() {
+        published = null;
+        publishedVehicleStatus = null;
     }
 
     private void connect() throws Exception {
@@ -168,14 +196,14 @@ final class MediaBridgeController {
                 transport = null;
                 claimed = false;
                 cleaning = false;
-                published = null;
+                invalidatePublished();
                 nextConnect = SystemClock.elapsedRealtime() + 5000;
                 status = "媒体中心连接已断开，等待重连";
             }
             @Override public void command(String name, MediaBridgeState.Snapshot target) { control(name, target); }
             @Override public void focusLost() {
                 claimed = false;
-                published = null;
+                invalidatePublished();
                 MediaBridgeState.info("[sender] MediaCenter focus lost; no automatic reclaim while playback stays unchanged");
             }
         });
@@ -194,7 +222,7 @@ final class MediaBridgeController {
         status = reason;
         if (cleaning) return;
         if (transport == null) return;
-        transport.snapshot(null, "");
+        transport.clearSnapshot();
         if (transport.registrationUncertain()) {
             cleaning = true;
             claimed = false;
@@ -227,7 +255,7 @@ final class MediaBridgeController {
                 transport = null;
                 cleaning = false;
                 clearOnRelease = false;
-                published = null;
+                invalidatePublished();
                 nextConnect = now + 5000;
                 MediaBridgeState.info("[sender] release confirmed");
                 return;
@@ -241,6 +269,11 @@ final class MediaBridgeController {
     }
 
     private void control(String command, MediaBridgeState.Snapshot target) {
+        if (enabled && !cleaning && current == null && target == null && command.equals("onSourceSelected")) {
+            explicitPlay = true;
+            MediaBridgeState.info("[callback] selected vehicle status source; no player command");
+            return;
+        }
         if (!enabled || cleaning || current == null || !current.sameSession(target)) {
             MediaBridgeState.info("[callback] ignored stale " + command);
             return;
@@ -292,6 +325,7 @@ final class MediaBridgeController {
         if (now - lastHeartbeat >= 30000) {
             lastHeartbeat = now;
             MediaBridgeState.info("[sender] heartbeat enabled=" + enabled + " reader=" + reader
+                    + " mode=" + (!enabled ? "off" : current == null ? "status-only" : "media")
                     + " connected=" + (transport != null && transport.connected())
                     + " registered=" + (transport != null && transport.registered())
                     + " claimed=" + claimed + " cleaning=" + cleaning + " status=" + status);

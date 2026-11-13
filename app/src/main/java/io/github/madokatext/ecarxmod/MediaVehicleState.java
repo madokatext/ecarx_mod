@@ -44,7 +44,7 @@ final class MediaVehicleState {
         String switchValue = VehicleControl.SMART_CHARGE.stateValue(charge);
         // Match the stock smart-charge switch: SOC_HOLD is a separate mode and displays as off.
         String enabled = switchValue.equals("1") ? "开" : switchValue.equals("0") ? "关" : "未知";
-        String display = mode + " - 保电 " + enabled + " - "
+        String display = mode + " - " + enabled + " - "
                 + (target < 0 ? "未知" : Integer.toString(target)) + "%";
         String detail = "ready=" + ready + " power=" + hex(power) + " charge=" + hex(charge)
                 + " savedTarget=" + target + " display=\"" + display + "\"";

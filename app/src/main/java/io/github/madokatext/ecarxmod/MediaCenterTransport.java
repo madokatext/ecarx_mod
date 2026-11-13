@@ -17,6 +17,7 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 /** Reflected ECARX MediaCenter contract: no vendor bytecode is bundled with the module. */
 final class MediaCenterTransport {
@@ -117,13 +118,32 @@ final class MediaCenterTransport {
     boolean registered() { return token != null; }
     boolean registrationUncertain() { return registrationUncertain; }
     void snapshot(MediaBridgeState.Snapshot value, String vehicleStatus) {
-        output = value == null ? null : new Output(value, vehicleStatus);
+        // A missing music session is a live vehicle-status card, not a cleared registration.
+        output = new Output(value, vehicleStatus);
     }
 
+    void clearSnapshot() { output = null; }
+
     static String displayTitle(MediaBridgeState.Snapshot value) {
-        if (value.artist.isEmpty()) return value.title;
-        if (value.title.isEmpty()) return value.artist;
-        return value.artist + " - " + value.title;
+        if (value == null) return "暂无播放";
+        String artist = value.artist.trim();
+        String title = value.title.trim();
+        switch (artist.toLowerCase(Locale.ROOT).replace('_', ' ')) {
+            case "":
+            case "未知":
+            case "未知歌手":
+            case "未知艺术家":
+            case "未知艺人":
+            case "unknown":
+            case "<unknown>":
+            case "[unknown]":
+            case "unknown artist":
+            case "unknown singer": artist = ""; break;
+            default: break;
+        }
+        if (artist.isEmpty()) return title.isEmpty() ? "暂无播放" : title;
+        if (title.isEmpty()) return artist;
+        return artist + " - " + title;
     }
 
     /** Atomically expose matching source metadata and display fields to Binder callbacks. */
@@ -173,7 +193,7 @@ final class MediaCenterTransport {
             accepted = Boolean.TRUE.equals(invoke(update, service, token, wirePlayback));
             MediaBridgeState.info("[transport] updateMusicPlaybackState accepted=" + accepted);
         }
-        invoke(progress, service, token, current == null ? 0L : current.input.progress());
+        invoke(progress, service, token, current == null || current.input == null ? 0L : current.input.progress());
         return accepted;
     }
 
@@ -268,9 +288,9 @@ final class MediaCenterTransport {
             if (client) {
                 if (name.equals("getMusicPlaybackInfo")) return playback;
                 if (name.equals("getCurrentProgress")) return number(method.getReturnType(), current == null ? 0 : current.progress());
-                if (name.equals("getCurrentSourceType")) return number(method.getReturnType(), current == null ? -1 : SOURCE);
+                if (name.equals("getCurrentSourceType")) return number(method.getReturnType(), display == null ? -1 : SOURCE);
                 if (name.equals("getMediaSourceTypeList")) return new int[]{SOURCE};
-                if (name.equals("getPlaylist")) return current == null ? Collections.emptyList() : Collections.singletonList(media);
+                if (name.equals("getPlaylist")) return display == null ? Collections.emptyList() : Collections.singletonList(media);
                 if (name.equals("onMediaCenterFocusChanged")) {
                     worker.post(() -> { if (!closed) events.focusLost(); });
                     return defaultValue(method.getReturnType());
@@ -284,6 +304,13 @@ final class MediaCenterTransport {
                         worker.post(() -> { if (!closed) events.command(name, current); });
                         return method.getReturnType() == boolean.class ? true : defaultValue(method.getReturnType());
                     }
+                    if (display != null && current == null) {
+                        if (name.equals("onSourceSelected") && validSource) {
+                            worker.post(() -> { if (!closed) events.command(name, null); });
+                            return method.getReturnType() == boolean.class ? true : defaultValue(method.getReturnType());
+                        }
+                        MediaBridgeState.trace("[callback] ignored " + name + " for status-only output");
+                    }
                     return defaultValue(method.getReturnType());
                 }
                 if (name.startsWith("on")) MediaBridgeState.trace("[callback] unhandled " + name);
@@ -294,12 +321,14 @@ final class MediaCenterTransport {
                 case "getAlbum": return current == null ? "" : current.album;
                 case "getDuration": return number(method.getReturnType(), current == null ? 0 : current.duration);
                 case "getPlaybackStatus": return number(method.getReturnType(), current != null && current.playing() ? 1 : 0);
-                case "getSourceType": return number(method.getReturnType(), current == null ? -1 : SOURCE);
-                case "getPlayingItemPositionInQueue": return number(method.getReturnType(), current == null ? -1 : 0);
+                case "getSourceType": return number(method.getReturnType(), display == null ? -1 : SOURCE);
+                case "getPlayingItemPositionInQueue": return number(method.getReturnType(), display == null ? -1 : 0);
                 case "getUUID":
-                case "getUuid": return current == null ? "" : current.packageName + ":" + (current.mediaId.isEmpty() ? current.title : current.mediaId);
-                case "getPackageName": return client ? context.getPackageName() : current == null ? "" : current.packageName;
-                case "getAppName": return current == null ? "ECARX 媒体转发" : current.appName;
+                case "getUuid": return display == null ? "" : current == null ? MediaBridgeState.MODULE + ":vehicle-status"
+                        : current.packageName + ":" + (current.mediaId.isEmpty() ? current.title : current.mediaId);
+                case "getPackageName": return client ? context.getPackageName() : display == null ? ""
+                        : current == null ? MediaBridgeState.MODULE : current.packageName;
+                case "getAppName": return current == null ? "ECARX 车辆状态" : current.appName;
                 case "getArtwork": return current == null || current.artwork.isEmpty() ? null : Uri.parse(current.artwork);
                 case "getLaunchIntent":
                 case "getPlayerIntent": return launch(current);
