@@ -11,6 +11,7 @@ import android.os.SystemClock;
 final class MediaBridgeController {
     private final Context context;
     private final HandlerThread thread = new HandlerThread("EcarxMediaBridge");
+    private final MediaInfoFile mediaFile = new MediaInfoFile();
     private Handler worker;
     private MediaSessionSource source;
     private MediaCenterTransport transport;
@@ -62,6 +63,8 @@ final class MediaBridgeController {
                     MediaBridgeState.info("[sender] forwarding enabled=" + enabled);
                 }
                 current = enabled ? readSource(config) : null;
+                // Write on input changes even if the MediaCenter service is unavailable or declines focus.
+                mediaFile.publish(current);
                 boolean playEdge = current != null && current.playing()
                         && (!current.sameSession(observed) || !observed.playing());
                 if (current != null && !current.samePayload(observed)) {
