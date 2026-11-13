@@ -12,12 +12,14 @@ final class MediaBridgeController {
     private final Context context;
     private final HandlerThread thread = new HandlerThread("EcarxMediaBridge");
     private final MediaInfoFile mediaFile = new MediaInfoFile();
+    private final MediaVehicleState vehicle;
     private Handler worker;
     private MediaSessionSource source;
     private MediaCenterTransport transport;
     private MediaBridgeState.Snapshot current;
     private MediaBridgeState.Snapshot observed;
     private MediaBridgeState.Snapshot published;
+    private String publishedVehicleStatus;
     private boolean enabled;
     private boolean claimed;
     private boolean cleaning;
@@ -39,6 +41,7 @@ final class MediaBridgeController {
 
     MediaBridgeController(Context context) {
         this.context = context.getApplicationContext() == null ? context : context.getApplicationContext();
+        vehicle = new MediaVehicleState(this.context);
     }
 
     void start() {
@@ -112,6 +115,7 @@ final class MediaBridgeController {
             return;
         }
         if (cleaning) return;
+        String vehicleStatus = vehicle.poll();
         long now = SystemClock.elapsedRealtime();
         if (transport == null) {
             if (now < nextConnect) return;
@@ -124,7 +128,7 @@ final class MediaBridgeController {
             }
             return;
         }
-        transport.snapshot(current);
+        transport.snapshot(current, vehicleStatus);
         boolean registeredNow = !transport.registered();
         if (registeredNow) transport.register();
         if (!claimed && current.playing() && (playEdge || registeredNow || explicitPlay)) {
@@ -136,17 +140,22 @@ final class MediaBridgeController {
             status = "媒体中心未授予播放归属或已让出，等待播放器重新播放：" + current.appName;
             return;
         }
-        boolean changed = !current.samePayload(published);
+        boolean changed = !current.samePayload(published) || !vehicleStatus.equals(publishedVehicleStatus);
         boolean accepted = transport.publish(changed);
-        if (accepted) published = current;
-        else throw new IllegalStateException("updateMusicPlaybackState returned false");
-        if (changed) MediaBridgeState.info("[sender] published " + current.describe() + " sourceType=6");
+        if (accepted) {
+            published = current;
+            publishedVehicleStatus = vehicleStatus;
+        } else throw new IllegalStateException("updateMusicPlaybackState returned false");
+        if (changed) MediaBridgeState.info("[sender] published " + current.describe()
+                + " displayTitle=\"" + MediaBridgeState.safe(MediaCenterTransport.displayTitle(current), 300)
+                + "\" displayArtist=\"" + vehicleStatus + "\" sourceType=6");
         if (MediaBridgeState.debug && now - lastProgressLog >= 15000) {
             lastProgressLog = now;
             MediaBridgeState.trace("[sender] progress=" + current.progress() + " reader=" + reader);
         }
         status = "已提交媒体中心（" + reader + "）：" + current.appName + " / "
                 + MediaBridgeState.safe(current.title, 100) + " / " + (current.playing() ? "播放" : "暂停")
+                + " / " + vehicleStatus
                 + "；仪表实际显示请在车上确认";
     }
 
@@ -185,7 +194,7 @@ final class MediaBridgeController {
         status = reason;
         if (cleaning) return;
         if (transport == null) return;
-        transport.snapshot(null);
+        transport.snapshot(null, "");
         if (transport.registrationUncertain()) {
             cleaning = true;
             claimed = false;

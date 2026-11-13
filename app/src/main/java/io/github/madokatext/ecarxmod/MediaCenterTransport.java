@@ -37,7 +37,7 @@ final class MediaCenterTransport {
     private final Handler worker;
     private final Events events;
     private final ServiceConnection connection;
-    private volatile MediaBridgeState.Snapshot snapshot;
+    private volatile Output output;
     private volatile boolean closed;
     private volatile boolean connected;
     private boolean bound;
@@ -116,7 +116,28 @@ final class MediaCenterTransport {
     boolean connected() { return connected && !closed; }
     boolean registered() { return token != null; }
     boolean registrationUncertain() { return registrationUncertain; }
-    void snapshot(MediaBridgeState.Snapshot value) { snapshot = value; }
+    void snapshot(MediaBridgeState.Snapshot value, String vehicleStatus) {
+        output = value == null ? null : new Output(value, vehicleStatus);
+    }
+
+    static String displayTitle(MediaBridgeState.Snapshot value) {
+        if (value.artist.isEmpty()) return value.title;
+        if (value.title.isEmpty()) return value.artist;
+        return value.artist + " - " + value.title;
+    }
+
+    /** Atomically expose matching source metadata and display fields to Binder callbacks. */
+    private static final class Output {
+        final MediaBridgeState.Snapshot input;
+        final String title;
+        final String artist;
+
+        Output(MediaBridgeState.Snapshot input, String vehicleStatus) {
+            this.input = input;
+            title = displayTitle(input);
+            artist = vehicleStatus;
+        }
+    }
 
     void register() throws Exception {
         if (!connected() || token != null) throw new IllegalStateException("Invalid register state");
@@ -143,15 +164,16 @@ final class MediaCenterTransport {
 
     boolean publish(boolean metadataChanged) throws Exception {
         if (!connected() || token == null) throw new IllegalStateException("No live media registration");
+        Output current = output;
         boolean accepted = true;
         if (metadataChanged) {
-            List<?> entries = snapshot == null ? Collections.emptyList() : Collections.singletonList(media);
+            List<?> entries = current == null ? Collections.emptyList() : Collections.singletonList(media);
             Object wrapped = invoke(listWrapper, null, entries);
             invoke(playlist, service, token, SOURCE, wrapped);
             accepted = Boolean.TRUE.equals(invoke(update, service, token, wirePlayback));
             MediaBridgeState.info("[transport] updateMusicPlaybackState accepted=" + accepted);
         }
-        invoke(progress, service, token, snapshot == null ? 0L : snapshot.progress());
+        invoke(progress, service, token, current == null ? 0L : current.input.progress());
         return accepted;
     }
 
@@ -159,7 +181,7 @@ final class MediaCenterTransport {
         // A token is never forgotten merely because cleanup threw or returned false.
         if (token == null) return true;
         if (!connected()) throw new IllegalStateException("Cleanup requires live service");
-        snapshot = null;
+        output = null;
         if (owned) {
             try {
                 invoke(playlist, service, token, SOURCE, Collections.emptyList());
@@ -178,7 +200,7 @@ final class MediaCenterTransport {
     void close() {
         closed = true;
         connected = false;
-        snapshot = null;
+        output = null;
         if (bound) {
             bound = false;
             try { context.unbindService(connection); }
@@ -241,7 +263,8 @@ final class MediaCenterTransport {
             if (name.equals("equals")) return args != null && object == args[0];
             if (name.equals("hashCode")) return System.identityHashCode(object);
             if (name.equals("toString")) return "EcarxModMediaPayload";
-            MediaBridgeState.Snapshot current = closed ? null : snapshot;
+            Output display = closed ? null : output;
+            MediaBridgeState.Snapshot current = display == null ? null : display.input;
             if (client) {
                 if (name.equals("getMusicPlaybackInfo")) return playback;
                 if (name.equals("getCurrentProgress")) return number(method.getReturnType(), current == null ? 0 : current.progress());
@@ -266,8 +289,8 @@ final class MediaCenterTransport {
                 if (name.startsWith("on")) MediaBridgeState.trace("[callback] unhandled " + name);
             }
             switch (name) {
-                case "getTitle": return current == null ? "" : current.title;
-                case "getArtist": return current == null ? "" : current.artist;
+                case "getTitle": return display == null ? "" : display.title;
+                case "getArtist": return display == null ? "" : display.artist;
                 case "getAlbum": return current == null ? "" : current.album;
                 case "getDuration": return number(method.getReturnType(), current == null ? 0 : current.duration);
                 case "getPlaybackStatus": return number(method.getReturnType(), current != null && current.playing() ? 1 : 0);

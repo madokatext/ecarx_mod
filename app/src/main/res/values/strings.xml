@@ -22,7 +22,7 @@
     <string name="hvac_correction_hint">默认关闭。开启后每次自动变更最多纠正两次，保留手动选择，并让出一键除雾、除霜及强力制冷的必要循环切换。保存后约 1 秒内生效；关闭不影响文件手动控制和实际状态输出。</string>
     <string name="media_settings_title">第三方音乐与仪表</string>
     <string name="media_forward_label">转发第三方音乐到仪表</string>
-    <string name="media_forward_hint">默认关闭，保存后约 1 秒内生效。播放器开始播放后同步歌名、歌手、专辑、状态和进度；支持标准媒体会话的播放器。暂停时保留，停止后释放；车机媒体中心返回的播放、暂停和上下首操作会转给当前播放器。请关闭 HY 等其他媒体代理，避免争用。升级后需在 LSPosed 保持勾选原车设置并重启车机。</string>
+    <string name="media_forward_hint">默认关闭，保存后约 1 秒内生效。仪表歌名显示“艺术家 - 歌名”，歌手栏显示“EV/HEV - 保电 开/关 - 目标百分比%”，车辆状态变化约 1 秒内重新提交。支持标准媒体会话的播放器，同步专辑、状态和进度。暂停时保留，停止后释放；车机媒体中心返回的播放、暂停和上下首操作会转给当前播放器。请关闭 HY 等其他媒体代理，避免争用。升级后需在 LSPosed 保持勾选原车设置并重启车机。</string>
     <string name="media_debug_label">详细媒体调试日志（logcat）</string>
     <string name="media_notification_access">打开通知使用权（备用读取入口）</string>
     <string name="media_notification_unavailable">车机没有通知使用权设置页；系统宿主可读取媒体会话时不需要此权限。请查看 EcarxMediaBridge 日志。</string>
